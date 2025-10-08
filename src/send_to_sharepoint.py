@@ -76,6 +76,8 @@ def rewrite_endpoint(request):
 
 client = GraphClient(acquire_token)
 client.before_execute(rewrite_endpoint, False)
+
+# Get the root drive folder where files will be uploaded
 root_drive = client.sites.get_by_url(tenant_url).drive.root.get_by_path(upload_path)
 
 # Cache for created folders to avoid recreating them
@@ -110,23 +112,57 @@ def ensure_folder_exists(parent_drive, folder_path):
             current_drive = created_folders[current_path]
             continue
         
+        # Try to get or create the folder
+        folder_found = False
         try:
-            # Try to get the folder
+            # Try to get the folder - check if it exists
+            print(f"[?] Checking if folder exists: {current_path}")
             folder = current_drive.get_by_path(folder_name).get().execute_query()
+            # If we get here, folder exists
             current_drive = folder
             created_folders[current_path] = folder
-            print(f"[✓] Folder exists: {current_path}")
+            print(f"[✓] Folder already exists: {current_path}")
+            folder_found = True
         except Exception as e:
-            # Folder doesn't exist, create it
+            # Folder doesn't exist, need to create it
+            print(f"[!] Folder does not exist, will create: {current_path}")
+            folder_found = False
+        
+        if not folder_found:
             try:
                 print(f"[+] Creating folder: {current_path}")
-                folder = current_drive.children.add(folder_name, folder=True).execute_query()
+                # Create folder using the correct API method
+                # For OneDrive/Graph API, we need to create a folder as a DriveItem
+                folder_request = {
+                    "name": folder_name,
+                    "folder": {},
+                    "@microsoft.graph.conflictBehavior": "replace"
+                }
+                
+                # Create the folder
+                folder = current_drive.children.add(folder_request).execute_query()
                 current_drive = folder
                 created_folders[current_path] = folder
                 print(f"[✓] Created folder: {current_path}")
+                
             except Exception as create_error:
                 print(f"[Error] Failed to create folder {current_path}: {create_error}")
-                raise create_error
+                # Try alternative method if the first fails
+                try:
+                    print(f"[!] Trying alternative method to create folder: {current_path}")
+                    # Alternative: create empty DriveItem with folder facet
+                    new_folder = DriveItem(current_drive.context)
+                    new_folder.name = folder_name
+                    new_folder.folder = {}
+                    
+                    folder = current_drive.children.add(new_folder).execute_query()
+                    current_drive = folder
+                    created_folders[current_path] = folder
+                    print(f"[✓] Created folder (alternative method): {current_path}")
+                except Exception as alt_error:
+                    print(f"[Error] Alternative method also failed: {alt_error}")
+                    print(f"[!] Will attempt to upload files to parent folder instead")
+                    return current_drive
     
     return current_drive
 
@@ -227,6 +263,11 @@ if local_dirs:
 elif local_files:
     # If we only have files, use their common parent directory
     base_path = os.path.dirname(os.path.commonpath(local_files))
+
+# First, execute the root_drive query to initialize it
+print("[*] Connecting to SharePoint...")
+root_drive.get().execute_query()
+print(f"[✓] Connected to SharePoint at: {upload_path}")
 
 # Upload all files with their directory structure
 for f in local_files:
