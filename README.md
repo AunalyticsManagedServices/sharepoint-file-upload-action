@@ -252,18 +252,21 @@ When `force_upload` is `false` (default), the action:
 [*] File changed (hash mismatch): config.json
 [+] New file to upload: changelog.md
 
+============================================================
+[✓] SYNC PROCESS COMPLETED
+============================================================
 [STATS] Sync Statistics:
-   - New files uploaded:         3
-   - Files updated:              2
-   - Files skipped (unchanged):  45
-   - Total files processed:      50
-
+   - New files uploaded:          255
+   - Files updated:               129
+   - Files skipped (unchanged):   569
+   - Failed uploads:                0
+   - Total files processed:       819
 [DATA] Transfer Summary:
-   - Data uploaded:   15.3 MB
-   - Data skipped:    125.7 MB
-   - Total savings:   125.7 MB (45 files not re-uploaded)
-
-[EFFICIENCY] 90.0% of files were already up-to-date
+   - Data uploaded:   93.7 MB
+   - Data skipped:    177.5 MB
+   - Total savings:   177.5 MB (569 files not re-uploaded)
+[EFFICIENCY] 59.7% of files were already up-to-date
+============================================================
 ```
 
 ### Markdown Conversion
