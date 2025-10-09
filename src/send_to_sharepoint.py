@@ -1342,13 +1342,23 @@ def check_file_needs_update(drive, local_path, file_name):
         remote_hash = None
 
         try:
-            # Try to get the list item with FileHash property
-            list_item = existing_file.listitem_allfields
-            list_item.get().select(["FileHash", "Id"]).execute_query()
+            # Graph API DriveItems require expanding listItemAllFields to access SharePoint metadata
+            # We need to refetch the file with the expanded property
+            existing_file.expand(["listItemAllFields"]).get().execute_query()
 
-            # Check if FileHash property exists and has a value
-            if hasattr(list_item, 'properties') and list_item.properties:
-                remote_hash = list_item.properties.get('FileHash')
+            # Now try to access the list item properties
+            if hasattr(existing_file, 'listItemAllFields') and existing_file.listItemAllFields:
+                list_item_fields = existing_file.listItemAllFields
+
+                # Access the FileHash property from the fields
+                if hasattr(list_item_fields, 'properties') and list_item_fields.properties:
+                    remote_hash = list_item_fields.properties.get('FileHash')
+                elif hasattr(list_item_fields, 'FileHash'):
+                    # Sometimes the property is directly accessible
+                    remote_hash = getattr(list_item_fields, 'FileHash', None)
+                else:
+                    remote_hash = None
+
                 if remote_hash:
                     hash_comparison_available = True
                     print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
@@ -1662,19 +1672,20 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
                         break
 
                 if uploaded_file:
-                    # First, we need to load the listitem_allfields property
-                    # This property isn't automatically available on DriveItem objects
-                    uploaded_file.get().select(["id", "name"]).execute_query()
+                    # Graph API DriveItems require expanding listItemAllFields to access SharePoint metadata
+                    uploaded_file.expand(["listItemAllFields"]).get().execute_query()
 
-                    # Now access and load the list item with its properties
-                    list_item = uploaded_file.listitem_allfields
-                    list_item.get().execute_query()
+                    # Now access the list item fields to set the FileHash property
+                    if hasattr(uploaded_file, 'listItemAllFields') and uploaded_file.listItemAllFields:
+                        list_item_fields = uploaded_file.listItemAllFields
 
-                    # Set the FileHash property and update
-                    list_item.set_property("FileHash", local_hash)
-                    list_item.update()
-                    uploaded_file.context.execute_query()
-                    print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
+                        # Set the FileHash property and update
+                        list_item_fields.set_property("FileHash", local_hash)
+                        list_item_fields.update()
+                        uploaded_file.context.execute_query()
+                        print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
+                    else:
+                        print(f"[!] Could not access listItemAllFields to set hash")
                 else:
                     print(f"[!] Could not find uploaded file to set hash metadata")
             except Exception as hash_error:
@@ -1893,11 +1904,20 @@ for f in local_files:
                             # First try hash comparison if available
                             if html_hash and filehash_column_available:
                                 try:
-                                    list_item = child.listitem_allfields
-                                    list_item.get().select(["FileHash"]).execute_query()
+                                    # Expand listItemAllFields to access SharePoint metadata
+                                    child.expand(["listItemAllFields"]).get().execute_query()
 
-                                    if hasattr(list_item, 'properties') and list_item.properties:
-                                        remote_hash = list_item.properties.get('FileHash')
+                                    # Access the list item fields to get FileHash
+                                    if hasattr(child, 'listItemAllFields') and child.listItemAllFields:
+                                        list_item_fields = child.listItemAllFields
+
+                                        # Try to get FileHash from properties or directly
+                                        remote_hash = None
+                                        if hasattr(list_item_fields, 'properties') and list_item_fields.properties:
+                                            remote_hash = list_item_fields.properties.get('FileHash')
+                                        elif hasattr(list_item_fields, 'FileHash'):
+                                            remote_hash = getattr(list_item_fields, 'FileHash', None)
+
                                         if remote_hash:
                                             hash_comparison_used = True
                                             if remote_hash == html_hash:
