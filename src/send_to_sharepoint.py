@@ -53,7 +53,9 @@ import time       # Time-related functions for delays and timestamps
 import tempfile   # Temporary file and directory creation
 import shutil     # High-level file operations (copy, move, etc.)
 import hashlib    # For computing file hashes (MD5, SHA256, etc.)
+import xxhash     # For fast xxHash128 non-cryptographic hashing
 from datetime import datetime, timezone  # For timestamp comparisons
+import requests   # For direct Graph API calls
 
 # Third-party library imports (need to be installed via pip)
 from dotenv import load_dotenv  # Load environment variables from .env file
@@ -229,6 +231,68 @@ def sanitize_path_components(path):
 
     # Rejoin path
     return '/'.join(sanitized_components)
+
+# ====================================================================
+# FILE HASHING WITH XXHASH128 FOR FAST COMPARISON
+# ====================================================================
+
+def get_optimal_chunk_size(file_size):
+    """
+    Calculate optimal chunk size based on file size for efficient hashing.
+
+    Larger files benefit from larger chunks to reduce I/O overhead,
+    while smaller files use smaller chunks to avoid memory waste.
+
+    Args:
+        file_size (int): Size of the file in bytes
+
+    Returns:
+        int: Optimal chunk size in bytes for reading the file
+    """
+    if file_size < 1 * 1024 * 1024:  # < 1MB
+        return 64 * 1024  # 64KB chunks - small files, minimal memory
+    elif file_size < 10 * 1024 * 1024:  # < 10MB
+        return 256 * 1024  # 256KB chunks - balance memory/speed
+    elif file_size < 100 * 1024 * 1024:  # < 100MB
+        return 1 * 1024 * 1024  # 1MB chunks - larger reads for efficiency
+    elif file_size < 1024 * 1024 * 1024:  # < 1GB
+        return 4 * 1024 * 1024  # 4MB chunks - maximize throughput
+    else:  # >= 1GB
+        return 8 * 1024 * 1024  # 8MB chunks - optimal for very large files
+
+def calculate_file_hash(file_path):
+    """
+    Calculate xxHash128 for a file using dynamic chunk sizing.
+
+    xxHash128 is a non-cryptographic hash that's 10-20x faster than SHA-256
+    while still providing excellent avalanche properties and collision resistance
+    for file deduplication purposes.
+
+    Args:
+        file_path (str): Path to the file to hash
+
+    Returns:
+        str: Hexadecimal string representation of the xxHash128 (32 characters)
+
+    Note:
+        The hash is deterministic - same file always produces same hash
+        regardless of when/where it's calculated (no timestamps involved).
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        chunk_size = get_optimal_chunk_size(file_size)
+
+        # Use xxh128 (alias for xxh3_128) for maximum speed on modern CPUs
+        hasher = xxhash.xxh128()
+
+        with open(file_path, 'rb') as f:
+            while chunk := f.read(chunk_size):
+                hasher.update(chunk)
+
+        return hasher.hexdigest()
+    except Exception as e:
+        print(f"[!] Error calculating hash for {file_path}: {e}")
+        return None
 
 # ====================================================================
 # MARKDOWN TO HTML CONVERSION WITH MERMAID SUPPORT
@@ -653,6 +717,151 @@ def acquire_token():
 
     return token
 
+def check_and_create_filehash_column(site_url, list_name):
+    """
+    Check if FileHash column exists in SharePoint document library and create if needed.
+
+    Uses direct Graph API calls to bypass Office365-REST-Python-Client limitations.
+    This ensures the FileHash column is available for storing file hashes.
+
+    Args:
+        site_url (str): Full SharePoint site URL
+        list_name (str): Name of the document library (usually "Documents")
+
+    Returns:
+        bool: True if column exists or was created successfully, False otherwise
+
+    Note:
+        Requires Sites.ReadWrite.All or Sites.Manage.All permissions.
+        The column is created as a single line of text with 32 character limit
+        (exact length of xxHash128 hexadecimal representation).
+    """
+    try:
+        # Get token for Graph API
+        print("[?] Checking for FileHash column in SharePoint...")
+        token = acquire_token()
+
+        if 'access_token' not in token:
+            print(f"[!] Failed to acquire token for Graph API: {token.get('error_description', 'Unknown error')}")
+            return False
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+
+        # Parse site URL to get site ID
+        # Format: https://tenant.sharepoint.com/sites/sitename
+        site_parts = site_url.replace('https://', '').split('/')
+        host_name = site_parts[0]
+        site_name = site_parts[2] if len(site_parts) > 2 else ''
+
+        # Get site ID first
+        site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
+        site_response = requests.get(site_endpoint, headers=headers)
+
+        if site_response.status_code != 200:
+            print(f"[!] Failed to get site information: {site_response.status_code}")
+            print(f"[DEBUG] Response: {site_response.text[:500]}")
+            return False
+
+        site_data = site_response.json()
+        site_id = site_data.get('id')
+
+        if not site_id:
+            print("[!] Could not retrieve site ID")
+            return False
+
+        # Get the document library (list) ID
+        lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
+        lists_response = requests.get(lists_endpoint, headers=headers)
+
+        if lists_response.status_code != 200:
+            print(f"[!] Failed to get lists: {lists_response.status_code}")
+            return False
+
+        lists_data = lists_response.json()
+        list_id = None
+
+        # Find the document library by name
+        for lst in lists_data.get('value', []):
+            if lst.get('displayName') == list_name or lst.get('name') == list_name:
+                list_id = lst.get('id')
+                break
+
+        if not list_id:
+            # Try "Shared Documents" as fallback
+            for lst in lists_data.get('value', []):
+                if lst.get('displayName') == 'Shared Documents' or lst.get('name') == 'Shared Documents':
+                    list_id = lst.get('id')
+                    print(f"[!] Using 'Shared Documents' instead of '{list_name}'")
+                    break
+
+        if not list_id:
+            print(f"[!] Document library '{list_name}' not found")
+            return False
+
+        # Check if FileHash column already exists
+        columns_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/columns"
+        columns_response = requests.get(columns_endpoint, headers=headers)
+
+        if columns_response.status_code != 200:
+            print(f"[!] Failed to get columns: {columns_response.status_code}")
+            return False
+
+        columns_data = columns_response.json()
+        filehash_exists = False
+
+        # Check for existing FileHash column
+        for column in columns_data.get('value', []):
+            if column.get('name') == 'FileHash' or column.get('displayName') == 'FileHash':
+                filehash_exists = True
+                print("[✓] FileHash column already exists")
+                break
+
+        # Create column if it doesn't exist
+        if not filehash_exists:
+            print("[+] Creating FileHash column...")
+
+            # Column definition for FileHash
+            column_definition = {
+                "displayName": "FileHash",
+                "name": "FileHash",
+                "description": "xxHash128 checksum for file content verification",
+                "enforceUniqueValues": False,
+                "hidden": False,
+                "indexed": False,
+                "readOnly": False,
+                "required": False,
+                "text": {
+                    "allowMultipleLines": False,
+                    "appendChangesToExistingText": False,
+                    "linesForEditing": 0,
+                    "maxLength": 32  # xxHash128 produces 32-character hex string
+                }
+            }
+
+            # Create the column
+            create_response = requests.post(
+                columns_endpoint,
+                headers=headers,
+                json=column_definition
+            )
+
+            if create_response.status_code == 201:
+                print("[✓] FileHash column created successfully")
+                return True
+            else:
+                print(f"[!] Failed to create FileHash column: {create_response.status_code}")
+                print(f"[DEBUG] Response: {create_response.text[:500]}")
+                return False
+
+        return True
+
+    except Exception as e:
+        print(f"[!] Error checking/creating FileHash column: {e}")
+        return False
+
 def rewrite_endpoint(request):
     """
     Modify API request URLs for non-standard Microsoft Graph endpoints.
@@ -1020,12 +1229,12 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
 
 def check_file_needs_update(drive, local_path, file_name):
     """
-    Check if a file in SharePoint needs to be updated by comparing size and modification time.
+    Check if a file in SharePoint needs to be updated by comparing hash or size.
 
     This function implements efficient file comparison to avoid unnecessary uploads.
-    Files are considered identical if:
-    1. Size matches exactly
-    2. Local file is not newer than SharePoint file
+    Files are compared using:
+    1. FileHash (xxHash128) if column exists - most reliable
+    2. Size comparison as fallback - works without custom columns
 
     Args:
         drive (DriveItem): The folder to check for existing file
@@ -1033,22 +1242,35 @@ def check_file_needs_update(drive, local_path, file_name):
         file_name (str): Name of the file to check
 
     Returns:
-        tuple: (needs_update: bool, exists: bool, remote_file: DriveItem or None)
+        tuple: (needs_update: bool, exists: bool, remote_file: DriveItem or None, local_hash: str or None)
             - needs_update: True if file should be uploaded
             - exists: True if file exists in SharePoint
             - remote_file: The existing SharePoint file object (if exists)
+            - local_hash: The calculated hash of the local file (if computed)
 
     Example:
-        needs_update, exists, remote = check_file_needs_update(folder, "/path/to/file.pdf", "file.pdf")
+        needs_update, exists, remote, hash_val = check_file_needs_update(folder, "/path/to/file.pdf", "file.pdf")
         if not needs_update:
             print("File is up to date, skipping")
     """
     # Sanitize the file name to match what would be stored in SharePoint
     sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
 
+    # Calculate local file hash upfront for efficiency
+    local_hash = calculate_file_hash(local_path)
+    if local_hash:
+        print(f"[#] Local hash: {local_hash[:8]}... for {sanitized_name}")
+
     # Get local file information
     local_size = os.path.getsize(local_path)
-    local_modified = os.path.getmtime(local_path)  # Unix timestamp
+    local_modified = os.path.getmtime(local_path)  # Unix timestamp (unreliable in Git/Docker)
+
+    # Get debug flag
+    debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
+    # Note: Since this always runs in Docker with Git-cloned files,
+    # timestamps are unreliable (all files have "now" as timestamp).
+    # We primarily rely on file size for comparison.
 
     # Debug: Show what we're checking
     print(f"[?] Checking if file exists in SharePoint: {sanitized_name}")
@@ -1070,7 +1292,7 @@ def check_file_needs_update(drive, local_path, file_name):
         if existing_file is None:
             # File not found in folder
             print(f"[+] New file to upload: {sanitized_name}")
-            return True, False, None
+            return True, False, None, local_hash
 
         # First check if this is a file or folder
         # In SharePoint, items have both 'file' and 'folder' properties, but only one is populated
@@ -1127,7 +1349,7 @@ def check_file_needs_update(drive, local_path, file_name):
         if is_folder:
             # It's definitely a folder
             print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
-            return True, False, None
+            return True, False, None, local_hash
 
         # Treat as file if it has file property or if we can't determine type
         # (Better to try uploading than to skip)
@@ -1136,23 +1358,55 @@ def check_file_needs_update(drive, local_path, file_name):
         # Skip if we determined this is a folder
         if is_folder and not is_file:
             # Don't try to get file metadata for folders
-            return True, False, None
+            return True, False, None, local_hash
 
-        # For files, try to get size and date if not already available
-        if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
-            try:
-                print(f"[?] Fetching file comparison metadata for: {sanitized_name}")
-                # Try to refresh the item's properties
-                # Just use the existing_file object directly since we already have it
-                existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file", "folder"]).execute_query()
-            except Exception as select_error:
-                error_str = str(select_error)
-                # Check if this is the specific dangerous path error
-                if "dangerous Request.Path" in error_str or "%3Ckey%3E" in error_str:
-                    print(f"[!] SharePoint API error, will re-upload to be safe: URL encoding issue")
-                else:
-                    print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
-                return True, False, None
+        # First, try to get the FileHash property if it exists
+        hash_comparison_available = False
+        remote_hash = None
+
+        try:
+            # Try to get the list item with FileHash property
+            list_item = existing_file.listitem_allfields
+            list_item.get().select(["FileHash", "Id"]).execute_query()
+
+            # Check if FileHash property exists and has a value
+            if hasattr(list_item, 'properties') and list_item.properties:
+                remote_hash = list_item.properties.get('FileHash')
+                if remote_hash:
+                    hash_comparison_available = True
+                    print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
+
+                    # Compare hashes - this is the most reliable comparison
+                    if local_hash and local_hash == remote_hash:
+                        print(f"[=] File unchanged (hash match): {sanitized_name}")
+                        upload_stats['skipped_files'] += 1
+                        upload_stats['bytes_skipped'] += local_size
+                        return False, True, existing_file, local_hash
+                    elif local_hash:
+                        print(f"[*] File changed (hash mismatch): {sanitized_name}")
+                        return True, True, existing_file, local_hash
+        except Exception as hash_error:
+            # FileHash column might not exist or we can't access it
+            print(f"[!] Could not retrieve FileHash, falling back to size comparison: {str(hash_error)[:100]}")
+            hash_comparison_available = False
+
+        # If hash comparison wasn't available, fall back to size comparison
+        if not hash_comparison_available:
+            # For files, try to get size and date if not already available
+            if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
+                try:
+                    print(f"[?] Fetching file size for comparison: {sanitized_name}")
+                    # Try to refresh the item's properties
+                    # Just use the existing_file object directly since we already have it
+                    existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file", "folder"]).execute_query()
+                except Exception as select_error:
+                    error_str = str(select_error)
+                    # Check if this is the specific dangerous path error
+                    if "dangerous Request.Path" in error_str or "%3Ckey%3E" in error_str:
+                        print(f"[!] SharePoint API error, will re-upload to be safe: URL encoding issue")
+                    else:
+                        print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
+                    return True, False, None, local_hash
             # File exists - compare metadata
             # Try multiple ways to get size (different APIs use different property names)
             remote_size = None
@@ -1190,7 +1444,7 @@ def check_file_needs_update(drive, local_path, file_name):
                 print(f"[!] Cannot determine remote file size for: {sanitized_name}")
                 print(f"[DEBUG] Object type: {type(existing_file).__name__}")
                 print(f"[DEBUG] Object attributes: {[attr for attr in dir(existing_file) if not attr.startswith('_')][:20]}...")
-                return True, True, existing_file
+                return True, True, existing_file, local_hash
 
             # Parse SharePoint's timestamp (try multiple property names)
             remote_modified_str = None
@@ -1267,8 +1521,15 @@ def check_file_needs_update(drive, local_path, file_name):
             size_matches = (local_size == remote_size)
             time_matches = abs(local_modified - remote_modified) < 2  # 2-second tolerance
 
-            # File needs update if size differs OR local is significantly newer
-            needs_update = not size_matches or (local_modified > remote_modified + 2)
+            # File needs update logic depends on environment
+            if use_timestamp_comparison:
+                # Normal environment: Check both size and timestamp
+                needs_update = not size_matches or (local_modified > remote_modified + 2)
+            else:
+                # Git/Docker environment: Only check size (timestamps unreliable)
+                needs_update = not size_matches
+                if debug_metadata and not needs_update:
+                    print(f"[DEBUG] Size matches, skipping timestamp check in Git environment")
 
             if not needs_update:
                 print(f"[=] File unchanged (size: {local_size:,} bytes): {sanitized_name}")
@@ -1277,14 +1538,17 @@ def check_file_needs_update(drive, local_path, file_name):
             else:
                 if not size_matches:
                     print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
-                else:
+                elif use_timestamp_comparison:
                     print(f"[*] File is newer locally: {sanitized_name}")
+                else:
+                    # This shouldn't happen in Git environment (size already checked)
+                    print(f"[*] File needs update: {sanitized_name}")
 
-            return needs_update, True, existing_file
+            return needs_update, True, existing_file, local_hash
         else:
             # Item exists but it's not a file or folder we can identify
             print(f"[?] Unable to determine type of existing item: {sanitized_name}")
-            return True, False, None
+            return True, False, None, local_hash
 
     except Exception as e:
         # File doesn't exist in SharePoint (404 error is expected)
@@ -1298,14 +1562,14 @@ def check_file_needs_update(drive, local_path, file_name):
             print(f"[DEBUG] Error details: {e}")
             print(f"[DEBUG] This usually means time_last_modified returned unexpected type")
             print(f"[!] Will re-upload file to be safe")
-            return True, False, None
+            return True, False, None, local_hash
         else:
             # Some other error occurred
             print(f"[?] Error checking file existence: {e}")
             print(f"[DEBUG] Error type: {type(e).__name__}")
             print(f"[DEBUG] Full error: {error_str[:500]}")  # First 500 chars
             print(f"[+] Assuming new file: {sanitized_name}")
-        return True, False, None
+        return True, False, None, local_hash
 
 def check_and_delete_existing_file(drive, file_name):
     """
@@ -1377,7 +1641,7 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
     :param drive: The DriveItem representing the target folder
     :param local_path: Path to the local file to upload
     :param chunk_size: Size threshold for using resumable upload
-    :param force_upload: If True, skip comparison and always upload
+    :param force_upload: If True, skip comparison and always upload with new hash
     :param desired_name: Optional desired filename in SharePoint (for temp file uploads)
     """
     # Use desired_name if provided (for HTML conversions), otherwise use actual filename
@@ -1387,9 +1651,12 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
     # Sanitize the file name for SharePoint compatibility
     sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
 
+    # Calculate file hash for later use
+    local_hash = None
+
     # First, check if the file needs updating (unless forced)
     if not force_upload:
-        needs_update, exists, remote_file = check_file_needs_update(drive, local_path, file_name)
+        needs_update, exists, remote_file, local_hash = check_file_needs_update(drive, local_path, file_name)
 
         # If file doesn't need updating, skip it
         if not needs_update:
@@ -1416,7 +1683,12 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
                 print(f"    (Original name: {file_name})")
             upload_stats['new_files'] += 1
     else:
-        # Force upload mode - use old behavior
+        # Force upload mode - always delete and reupload with new hash
+        # Calculate hash now since we skipped check_file_needs_update
+        local_hash = calculate_file_hash(local_path)
+        if local_hash:
+            print(f"[#] Calculated hash for force upload: {local_hash[:8]}...")
+
         file_was_deleted = check_and_delete_existing_file(drive, file_name)
         if file_was_deleted:
             print(f"[→] Force uploading replacement file: {sanitized_name}")
@@ -1492,6 +1764,31 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
 
         # Update upload byte counter after successful upload
         upload_stats['bytes_uploaded'] += file_size
+
+        # Try to set the FileHash metadata if we have a hash
+        if local_hash:
+            try:
+                print(f"[#] Setting FileHash metadata...")
+                # Need to get the uploaded file's list item to set metadata
+                # We need to re-fetch the file to get its list item
+                children = drive.children.get().select(["name", "id"]).execute_query()
+                uploaded_file = None
+                for child in children:
+                    if child.name == sanitized_name:
+                        uploaded_file = child
+                        break
+
+                if uploaded_file:
+                    list_item = uploaded_file.listitem_allfields
+                    list_item.set_property("FileHash", local_hash)
+                    list_item.update()
+                    drive.context.execute_query()
+                    print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
+                else:
+                    print(f"[!] Could not find uploaded file to set hash metadata")
+            except Exception as hash_error:
+                print(f"[!] Could not set FileHash metadata: {str(hash_error)[:200]}")
+                # Continue anyway - file is uploaded successfully
 
     except Exception as e:
         # IMPORTANT: Clean up temp file even on failure to prevent conflicts
@@ -1583,7 +1880,7 @@ elif local_files:
     base_path = os.path.dirname(os.path.commonpath(local_files))
 
 # ====================================================================
-# SHAREPOINT CONNECTION TEST
+# SHAREPOINT CONNECTION TEST AND COLUMN SETUP
 # ====================================================================
 # Verify we can connect to SharePoint before processing files
 
@@ -1593,6 +1890,23 @@ try:
     # This also initializes the root_drive object for use
     root_drive.get().execute_query()
     print(f"[✓] Connected to SharePoint at: {upload_path}")
+
+    # Check and create FileHash column if needed
+    # Try to determine the document library name from the upload path
+    # Default to "Documents" or "Shared Documents" if not specified
+    library_name = "Documents"  # Default document library name
+    if upload_path and "/" in upload_path:
+        # If upload_path starts with a library name, use it
+        path_parts = upload_path.split("/")
+        if path_parts[0]:
+            library_name = path_parts[0]
+
+    # Attempt to create the FileHash column for hash-based comparison
+    filehash_column_available = check_and_create_filehash_column(tenant_url, library_name)
+    if filehash_column_available:
+        print("[✓] FileHash column is available for hash-based comparison")
+    else:
+        print("[!] FileHash column not available, will use size-based comparison")
 
 except Exception as conn_error:
     # Connection failed - provide helpful troubleshooting info
@@ -1643,9 +1957,12 @@ for f in local_files:
                 # Create a synthetic path that matches the original .md location but with .html extension
                 original_html_path = f.replace('.md', '.html')
 
-                # Get the size of the newly converted HTML file
+                # Get the size and hash of the newly converted HTML file
                 html_file_size = os.path.getsize(html_path)
+                html_hash = calculate_file_hash(html_path)
                 print(f"[HTML] Converted HTML size: {html_file_size:,} bytes")
+                if html_hash:
+                    print(f"[#] HTML hash: {html_hash[:8]}...")
 
                 # We'll use a modified version of upload_file_with_structure that accepts
                 # a separate actual file path and desired upload path
@@ -1668,44 +1985,71 @@ for f in local_files:
                 else:
                     target_folder = root_drive
 
-                # Check if HTML file exists in SharePoint and compare sizes
+                # Check if HTML file exists in SharePoint and compare hashes or sizes
                 desired_html_filename = os.path.basename(original_html_path)
                 html_needs_update = True  # Default to uploading
+                hash_comparison_used = False
 
                 try:
                     # Check if HTML already exists in SharePoint
-                    children = target_folder.children.get().select(["name", "size", "file"]).execute_query()
+                    children = target_folder.children.get().select(["name", "size", "file", "id"]).execute_query()
                     html_found = False
                     for child in children:
                         child_name = getattr(child, 'name', None)
                         if child_name and child_name == desired_html_filename:
                             html_found = True
-                            # Found existing HTML file - try multiple ways to get size
-                            remote_size = None
 
-                            # Try Graph API DriveItem properties
-                            if hasattr(child, 'size') and child.size is not None:
-                                remote_size = child.size
-                            # Try SharePoint File properties
-                            elif hasattr(child, 'length') and child.length is not None:
-                                remote_size = child.length
-                            # Try properties dictionary
-                            elif hasattr(child, 'properties'):
-                                remote_size = child.properties.get('size') or child.properties.get('Size') or child.properties.get('length') or child.properties.get('Length')
+                            # First try hash comparison if available
+                            if html_hash and filehash_column_available:
+                                try:
+                                    list_item = child.listitem_allfields
+                                    list_item.get().select(["FileHash"]).execute_query()
 
-                            if remote_size is not None:
-                                # Compare sizes
-                                if remote_size == html_file_size:
-                                    print(f"[=] HTML unchanged (size: {html_file_size:,} bytes): {desired_html_filename}")
-                                    html_needs_update = False
-                                    upload_stats['skipped_files'] += 1
-                                    upload_stats['bytes_skipped'] += html_file_size
+                                    if hasattr(list_item, 'properties') and list_item.properties:
+                                        remote_hash = list_item.properties.get('FileHash')
+                                        if remote_hash:
+                                            hash_comparison_used = True
+                                            if remote_hash == html_hash:
+                                                print(f"[=] HTML unchanged (hash match): {desired_html_filename}")
+                                                html_needs_update = False
+                                                upload_stats['skipped_files'] += 1
+                                                upload_stats['bytes_skipped'] += html_file_size
+                                            else:
+                                                print(f"[*] HTML changed (hash mismatch): {desired_html_filename}")
+                                                upload_stats['replaced_files'] += 1
+                                            break
+                                except:
+                                    # Hash comparison failed, fall back to size
+                                    pass
+
+                            # Fall back to size comparison if hash wasn't available
+                            if not hash_comparison_used:
+                                # Found existing HTML file - try multiple ways to get size
+                                remote_size = None
+
+                                # Try Graph API DriveItem properties
+                                if hasattr(child, 'size') and child.size is not None:
+                                    remote_size = child.size
+                                # Try SharePoint File properties
+                                elif hasattr(child, 'length') and child.length is not None:
+                                    remote_size = child.length
+                                # Try properties dictionary
+                                elif hasattr(child, 'properties'):
+                                    remote_size = child.properties.get('size') or child.properties.get('Size') or child.properties.get('length') or child.properties.get('Length')
+
+                                if remote_size is not None:
+                                    # Compare sizes - less reliable for HTML due to conversion variations
+                                    if remote_size == html_file_size:
+                                        print(f"[=] HTML unchanged (size: {html_file_size:,} bytes): {desired_html_filename}")
+                                        html_needs_update = False
+                                        upload_stats['skipped_files'] += 1
+                                        upload_stats['bytes_skipped'] += html_file_size
+                                    else:
+                                        print(f"[*] HTML size changed (local: {html_file_size:,} vs remote: {remote_size:,}): {desired_html_filename}")
+                                        upload_stats['replaced_files'] += 1
                                 else:
-                                    print(f"[*] HTML size changed (local: {html_file_size:,} vs remote: {remote_size:,}): {desired_html_filename}")
-                                    upload_stats['replaced_files'] += 1
-                            else:
-                                # Could not get size, assume needs update
-                                print(f"[!] Cannot determine remote HTML size, will upload: {desired_html_filename}")
+                                    # Could not get size, assume needs update
+                                    print(f"[!] Cannot determine remote HTML size, will upload: {desired_html_filename}")
                             break
 
                     if not html_found:

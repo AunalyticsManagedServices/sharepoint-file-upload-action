@@ -82,16 +82,16 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Github Checkout/Clone Repo
-        uses: actions/checkout@v4
+      - name: Github Checkout/Clone Repo # This is required
+        uses: actions/checkout@v4 # This is required
 
       - name: Upload to SharePoint
         uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
         with:
-          file_path: "docs/**/*.md"
+          file_path: "**/*"
           host_name: "yourcompany.sharepoint.com"
           site_name: "YourSite"
-          upload_path: "Shared Documents/GitHub Docs"
+          upload_path: "Shared Documents/GitHub Sync"
           tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
           client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
           client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
@@ -103,7 +103,7 @@ jobs:
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `file_path` | Files to upload (supports glob patterns) | `"docs/**/*.md"` |
+| `file_path` | Files to upload (supports glob patterns) | `"**/*"` |
 | `host_name` | Your SharePoint domain | `"company.sharepoint.com"` |
 | `site_name` | SharePoint site name | `"TeamDocs"` |
 | `upload_path` | Target folder in SharePoint | `"Shared Documents/Reports"` |
@@ -148,6 +148,9 @@ Understanding glob patterns helps you select exactly which files to upload:
 ### Example 1: Upload All Files and Folders 
 
 ```yaml
+- name: Github Checkout/Clone Repo # This is required
+  uses: actions/checkout@v4 # This is required
+
 - name: Sync All Files and Folders
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
@@ -164,6 +167,9 @@ Understanding glob patterns helps you select exactly which files to upload:
 ### Example 2: Upload Only Changed PDF Reports
 
 ```yaml
+- name: Github Checkout/Clone Repo # This is required
+  uses: actions/checkout@v4 # This is required
+
 - name: Upload Changed PDF Reports
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
@@ -181,6 +187,9 @@ Understanding glob patterns helps you select exactly which files to upload:
 ### Example 3: Convert and Upload Markdown Documentation
 
 ```yaml
+- name: Github Checkout/Clone Repo # This is required
+  uses: actions/checkout@v4 # This is required
+
 - name: Convert MD to HTML and Upload
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
@@ -198,6 +207,9 @@ Understanding glob patterns helps you select exactly which files to upload:
 ### Example 4: Government Cloud Deployment
 
 ```yaml
+- name: Github Checkout/Clone Repo # This is required
+  uses: actions/checkout@v4 # This is required
+
 - name: Upload to GovCloud SharePoint
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
