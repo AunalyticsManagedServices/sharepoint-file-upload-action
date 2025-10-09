@@ -1405,12 +1405,16 @@ for f in local_files:
                 # Convert to HTML
                 html_content = convert_markdown_to_html(md_content, os.path.basename(f))
 
-                # Create HTML file path (same location, different extension)
-                html_path = f.replace('.md', '.html')
+                # Create HTML file in temp directory to avoid permission issues
+                temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix=os.path.basename(f).replace('.md', '_'))
 
-                # Write HTML file temporarily
-                with open(html_path, 'w', encoding='utf-8') as html_file:
-                    html_file.write(html_content)
+                try:
+                    # Write HTML file to temp location
+                    with os.fdopen(temp_html_fd, 'w', encoding='utf-8') as html_file:
+                        html_file.write(html_content)
+                except Exception as write_error:
+                    os.close(temp_html_fd)  # Ensure file descriptor is closed
+                    raise write_error
 
                 # Upload the HTML file instead of the markdown
                 print(f"[HTML] Uploading converted HTML file: {html_path}")

@@ -19,12 +19,18 @@ RUN apk add --no-cache \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# Install mermaid-cli globally
-RUN npm install -g @mermaid-js/mermaid-cli
+# Install mermaid-cli globally with compatible puppeteer version
+# Using specific versions for stability - mermaid-cli 11.4.2 with puppeteer 21.11.0
+# This combination is known to work reliably in Docker environments
+RUN npm install -g @mermaid-js/mermaid-cli@11.4.2 puppeteer@21.11.0
 
 # Copy and install Python requirements
 COPY requirements.txt ./
 RUN pip install -r requirements.txt --no-cache-dir
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /tmp/chrome-crashpad && \
+    chmod 777 /tmp/chrome-crashpad /tmp
 
 USER 1000
 

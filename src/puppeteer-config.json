@@ -8,6 +8,9 @@
     "--no-first-run",
     "--no-zygote",
     "--single-process",
-    "--disable-gpu"
+    "--disable-gpu",
+    "--disable-crash-reporter",
+    "--disable-breakpad",
+    "--crash-dumps-dir=/tmp/chrome-crashpad"
   ]
 }
