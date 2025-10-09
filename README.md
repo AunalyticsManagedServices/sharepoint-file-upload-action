@@ -3,7 +3,7 @@
 > 🚀 Automatically sync files from GitHub to SharePoint with intelligent change detection and Markdown-to-HTML conversion
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-3.0.0-blue)](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action)
+[![Version](https://img.shields.io/badge/Version-3.1.0-blue)](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action)
 
 ## 📋 Table of Contents
 
@@ -38,7 +38,7 @@ This GitHub Action provides enterprise-grade file synchronization between GitHub
 
 | Feature | Description |
 |---------|-------------|
-| **Smart Sync** | Compares file size and modification time to skip unchanged files |
+| **Smart Sync** | Uses xxHash128 content hashing (or file size) to skip unchanged files |
 | **Markdown → HTML** | Converts `.md` files to beautifully styled HTML for SharePoint viewing |
 | **Mermaid Diagrams** | Renders Mermaid flowcharts/diagrams as embedded SVG |
 | **Batch Upload** | Handles multiple files and maintains folder structure |
@@ -51,7 +51,9 @@ This GitHub Action provides enterprise-grade file synchronization between GitHub
 
 Your SharePoint administrator needs to:
 1. Register an app in Azure AD
-2. Grant `Sites.ReadWrite.All` permissions
+2. Grant permissions:
+   - `Sites.ReadWrite.All` (minimum for file operations)
+   - `Sites.Manage.All` (optional, enables automatic FileHash column creation)
 3. Provide you with:
    - Tenant ID
    - Client ID
@@ -226,21 +228,27 @@ Understanding glob patterns helps you select exactly which files to upload:
 
 ## Advanced Features
 
-### Smart Sync
+### Smart Sync with Content Hashing
 
 When `force_upload` is `false` (default), the action:
 
 1. **Checks existing files** in SharePoint before uploading
-2. **Compares file size and modification time** to detect changes
-3. **Skips unchanged files** to save time and bandwidth
-4. **Reports statistics** showing files uploaded vs. skipped
+2. **Calculates xxHash128** checksums for ultra-fast content comparison
+3. **Falls back to file size** comparison if hash metadata unavailable
+4. **Skips unchanged files** to save time and bandwidth
+5. **Reports statistics** showing files uploaded vs. skipped
+
+**Note**: The action automatically creates a `FileHash` column in SharePoint (if permissions allow) to store content hashes for future comparisons. This provides more reliable change detection than timestamps, especially in CI/CD environments.
 
 **Console Output Example:**
 ```
 [OK] Smart sync mode enabled - unchanged files will be skipped
+[✓] FileHash column is available for hash-based comparison
 [?] Checking if file exists in SharePoint: README.md
-[=] File unchanged (size: 5,432 bytes): README.md
-[*] File size changed (local: 6,123 vs remote: 5,432): config.json
+[#] Local hash: a3f5c892... for README.md
+[#] Remote hash: a3f5c892... for README.md
+[=] File unchanged (hash match): README.md
+[*] File changed (hash mismatch): config.json
 [+] New file to upload: changelog.md
 
 [STATS] Sync Statistics:
@@ -366,6 +374,8 @@ To enable verbose logging, add a step before the upload:
 3. **Upload frequently** to minimize changes per sync
 4. **Organize files logically** to use targeted patterns
 5. **Schedule during off-peak hours** for large syncs
+
+**Performance Note**: The action uses xxHash128 for content verification, which processes files at 3-6 GB/s on modern CPUs. This is 10-20x faster than traditional SHA-256 hashing, ensuring minimal overhead even for large files.
 
 ### Benchmarks
 
