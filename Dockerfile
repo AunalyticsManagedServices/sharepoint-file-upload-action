@@ -1,4 +1,4 @@
-FROM python:3.11-alpine
+FROM python:3.11-alpine3.19
 HEALTHCHECK NONE
 WORKDIR /usr/src/app
 
@@ -15,24 +15,24 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont
 
-# Tell Puppeteer to skip installing Chrome. We'll use the installed chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Environment variables matching official mermaid-cli Docker setup
+ENV CHROME_BIN="/usr/bin/chromium-browser" \
+    PUPPETEER_SKIP_DOWNLOAD="true" \
+    PUPPETEER_EXECUTABLE_PATH="/usr/bin/chromium-browser"
 
 # Install mermaid-cli globally with compatible puppeteer version
-# Using specific versions for stability - mermaid-cli 11.4.2 with puppeteer 21.11.0
-# This combination is known to work reliably in Docker environments
-RUN npm install -g @mermaid-js/mermaid-cli@11.4.2 puppeteer@21.11.0
+RUN npm install -g @mermaid-js/mermaid-cli@11.4.2
 
 # Copy and install Python requirements
 COPY requirements.txt ./
 RUN pip install -r requirements.txt --no-cache-dir
 
-# Create necessary directories with proper permissions
-RUN mkdir -p /tmp/chrome-crashpad && \
-    chmod 777 /tmp/chrome-crashpad /tmp
+# Create a proper non-root user (following mermaid-cli pattern)
+RUN adduser -D -u 1000 sharepoint && \
+    mkdir -p /tmp && \
+    chmod 777 /tmp
 
-USER 1000
+USER sharepoint
 
 # Copy the Python script and puppeteer config
 COPY src/send_to_sharepoint.py /usr/src/app/

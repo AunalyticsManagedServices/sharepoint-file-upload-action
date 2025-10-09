@@ -1066,23 +1066,49 @@ def check_file_needs_update(drive, local_path, file_name):
             return True, False, None
 
         # First check if this is a file or folder
-        # In SharePoint, files have a 'file' property and folders have a 'folder' property
-        if hasattr(existing_file, 'folder') and existing_file.folder is not None:
-            # It's a folder with the same name as our file - conflict
+        # In SharePoint, items have both 'file' and 'folder' properties, but only one is populated
+        # We need to check which one has actual content, not just if it exists
+
+        # Try to determine if this is a folder
+        is_folder = False
+        is_file = False
+
+        # Check if folder property exists and has content (not just an empty object)
+        if hasattr(existing_file, 'folder'):
+            folder_prop = getattr(existing_file, 'folder', None)
+            # A real folder will have folder property as a non-None object
+            # Files may have folder property but it will be None
+            if folder_prop is not None:
+                # Additional check: folders don't have size in the same way files do
+                # If we can get the item's properties, check if it lacks typical file properties
+                is_folder = True
+
+        # Check if file property exists and has content
+        if hasattr(existing_file, 'file'):
+            file_prop = getattr(existing_file, 'file', None)
+            if file_prop is not None:
+                is_file = True
+
+        # Log only if there's ambiguity
+        if is_folder and is_file:
+            print(f"[!] Warning: Item {sanitized_name} has both file and folder properties")
+
+        if is_folder and not is_file:
+            # It's definitely a folder
             print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
             return True, False, None
 
-        # Now we know it's a file (or at least not a folder)
-        # Check if we need to fetch size and date properties for comparison
-        if hasattr(existing_file, 'file') and existing_file.file is not None:
-            # Only fetch size/date properties for files, not folders
-            if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
-                try:
-                    print(f"[?] Fetching file comparison metadata for: {sanitized_name}")
-                    existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file"]).execute_query()
-                except Exception as select_error:
-                    print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
-                    return True, False, None
+        # Treat as file if it has file property or if we can't determine type
+        # (Better to try uploading than to skip)
+
+        # Only fetch size/date properties for files, not folders
+        if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
+            try:
+                print(f"[?] Fetching file comparison metadata for: {sanitized_name}")
+                existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file"]).execute_query()
+            except Exception as select_error:
+                print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
+                return True, False, None
             # File exists - compare metadata
             # Safely access size attribute with fallback
             if hasattr(existing_file, 'size'):
@@ -1202,7 +1228,7 @@ def check_and_delete_existing_file(drive, file_name):
         # Other errors (network, permissions) will be caught later
         return False
 
-def upload_file(drive, local_path, chunk_size, force_upload=False):
+def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=None):
     """
     Upload a file to SharePoint/OneDrive, intelligently skipping unchanged files.
 
@@ -1210,8 +1236,10 @@ def upload_file(drive, local_path, chunk_size, force_upload=False):
     :param local_path: Path to the local file to upload
     :param chunk_size: Size threshold for using resumable upload
     :param force_upload: If True, skip comparison and always upload
+    :param desired_name: Optional desired filename in SharePoint (for temp file uploads)
     """
-    file_name = os.path.basename(local_path)
+    # Use desired_name if provided (for HTML conversions), otherwise use actual filename
+    file_name = desired_name if desired_name else os.path.basename(local_path)
     file_size = os.path.getsize(local_path)
 
     # Sanitize the file name for SharePoint compatibility
@@ -1272,13 +1300,22 @@ def upload_file(drive, local_path, chunk_size, force_upload=False):
         temp_file_created = False
         upload_path = local_path
 
-        if sanitized_name != file_name:
+        # Only create temp copy if the actual file needs renaming (not for desired_name cases)
+        if not desired_name and sanitized_name != file_name:
             # Create a temporary copy with the sanitized name
             temp_dir = tempfile.gettempdir()
             temp_path = os.path.join(temp_dir, sanitized_name)
             shutil.copy2(local_path, temp_path)
             upload_path = temp_path
             temp_file_created = True
+        elif desired_name and sanitized_name != desired_name:
+            # For HTML files from temp, we may need to create another temp with sanitized name
+            if sanitized_name != os.path.basename(local_path):
+                temp_dir = tempfile.gettempdir()
+                temp_path = os.path.join(temp_dir, sanitized_name)
+                shutil.copy2(local_path, temp_path)
+                upload_path = temp_path
+                temp_file_created = True
 
         # Perform the upload based on file size
         if file_size < effective_chunk_size:
@@ -1433,9 +1470,49 @@ for f in local_files:
                     os.close(temp_html_fd)  # Ensure file descriptor is closed
                     raise write_error
 
-                # Upload the HTML file instead of the markdown
-                print(f"[HTML] Uploading converted HTML file: {html_path}")
-                upload_file_with_structure(root_drive, html_path, base_path)
+                # Upload the HTML file to the same location as the original markdown
+                # We need to preserve the original path structure, not use the temp path
+                # Create a synthetic path that matches the original .md location but with .html extension
+                original_html_path = f.replace('.md', '.html')
+                print(f"[HTML] Uploading converted HTML file to: {original_html_path}")
+
+                # We'll use a modified version of upload_file_with_structure that accepts
+                # a separate actual file path and desired upload path
+                # First, get the relative path structure from the original markdown
+                if base_path:
+                    rel_path = os.path.relpath(original_html_path, base_path)
+                else:
+                    rel_path = original_html_path
+
+                # Normalize and sanitize the path
+                rel_path = rel_path.replace('\\', '/')
+                sanitized_rel_path = sanitize_path_components(rel_path)
+
+                # Get the directory path for the HTML file (same as markdown)
+                dir_path = os.path.dirname(sanitized_rel_path)
+
+                # Create folder structure if needed
+                if dir_path and dir_path != "." and dir_path != "":
+                    target_folder = ensure_folder_exists(root_drive, dir_path)
+                else:
+                    target_folder = root_drive
+
+                # Upload the temp HTML file to the correct location with the correct name
+                # Extract just the filename from the original path for the desired name
+                desired_html_filename = os.path.basename(original_html_path)
+                print(f"[→] Processing file: {original_html_path} (from temp: {html_path})")
+                for i in range(max_retry):
+                    try:
+                        upload_file(target_folder, html_path, 4*1024*1024, force_upload, desired_name=desired_html_filename)
+                        break
+                    except Exception as e:
+                        print(f"[Error] Upload failed: {e}, {type(e)}")
+                        if i == max_retry - 1:
+                            print(f"[Error] Failed to upload {original_html_path} after {max_retry} attempts")
+                            raise e
+                        else:
+                            print(f"[!] Retrying upload... ({i+1}/{max_retry})")
+                            time.sleep(2)
 
                 # Clean up temporary HTML file
                 if os.path.exists(html_path):
