@@ -889,8 +889,10 @@ def ensure_folder_exists(parent_drive, folder_path):
 def progress_status(offset, file_size):
     print(f"Uploaded {offset} bytes from {file_size} bytes ... {offset/file_size*100:.2f}%")
 
-def success_callback(remote_file, local_path):
-    print(f"[✓] File {local_path} has been uploaded to {remote_file.web_url}")
+def success_callback(remote_file, local_path, display_name=None):
+    # Use display_name if provided (for temp files), otherwise use local_path
+    file_display = display_name if display_name else local_path
+    print(f"[✓] File {file_display} has been uploaded to {remote_file.web_url}")
 
 def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, timeout_secs):
     """
@@ -917,7 +919,7 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
             # Note: The built-in method might need the sanitized name set differently
             # We'll rely on the library to handle this correctly
             remote_file = drive.upload_large_file(f).execute_query()
-            success_callback(remote_file, local_path)
+            success_callback(remote_file, local_path, display_name=sanitized_name)
             return
     except AttributeError:
         # Method doesn't exist, continue with manual session
@@ -987,7 +989,7 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
 
             # Use regular upload as fallback
             remote_file = drive.upload_file(upload_path).execute_query()
-            success_callback(remote_file, local_path)
+            success_callback(remote_file, local_path, display_name=sanitized_name)
 
             # Clean up temp file if created
             if temp_file_created and os.path.exists(temp_path):
@@ -1009,7 +1011,7 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
             qry = UploadSessionQuery(return_type, {"item": upload_props})
             drive.context.add_query(qry).after_query_execute(_start_upload)
             return_type.get().execute_query()
-            success_callback(return_type, local_path)
+            success_callback(return_type, local_path, display_name=sanitized_name)
 
 def check_file_needs_update(drive, local_path, file_name):
     """
@@ -1049,8 +1051,8 @@ def check_file_needs_update(drive, local_path, file_name):
     try:
         # Get all children in the folder to find our file
         # This is more reliable than get_by_path for some SharePoint configurations
-        # Only request name, file, and folder properties initially to identify type
-        children = drive.children.get().select(["name", "file", "folder"]).execute_query()
+        # Request all needed properties upfront to avoid secondary queries
+        children = drive.children.get().select(["name", "file", "folder", "size", "lastModifiedDateTime", "id"]).execute_query()
 
         existing_file = None
         for child in children:
@@ -1073,21 +1075,34 @@ def check_file_needs_update(drive, local_path, file_name):
         is_folder = False
         is_file = False
 
-        # Check if folder property exists and has content (not just an empty object)
+        # Check if folder property exists and has meaningful content
         if hasattr(existing_file, 'folder'):
             folder_prop = getattr(existing_file, 'folder', None)
-            # A real folder will have folder property as a non-None object
-            # Files may have folder property but it will be None
+            # SharePoint may return empty objects {} instead of None
+            # Check if it's not None AND has actual content (like childCount)
             if folder_prop is not None:
-                # Additional check: folders don't have size in the same way files do
-                # If we can get the item's properties, check if it lacks typical file properties
-                is_folder = True
+                # For folders, the folder property should have attributes like childCount
+                # An empty object {} won't have these attributes
+                if hasattr(folder_prop, 'childCount') or hasattr(folder_prop, 'child_count'):
+                    is_folder = True
+                # If no childCount, check if it's truly an empty object
+                elif not hasattr(folder_prop, '__dict__') or (hasattr(folder_prop, '__dict__') and folder_prop.__dict__):
+                    # Has some attributes, likely a real folder
+                    is_folder = True
 
-        # Check if file property exists and has content
+        # Check if file property exists and has meaningful content
         if hasattr(existing_file, 'file'):
             file_prop = getattr(existing_file, 'file', None)
+            # Same check for files - avoid empty objects
             if file_prop is not None:
-                is_file = True
+                # Files should have properties like mimeType or hashes
+                # Check if it's not just an empty object
+                if hasattr(file_prop, 'mimeType') or hasattr(file_prop, 'mime_type') or hasattr(file_prop, 'hashes'):
+                    is_file = True
+                # If no specific file attributes, check if it has any content
+                elif not hasattr(file_prop, '__dict__') or (hasattr(file_prop, '__dict__') and file_prop.__dict__):
+                    # Has some attributes, likely a real file
+                    is_file = True
 
         # Log only if there's ambiguity
         if is_folder and is_file:
@@ -1102,12 +1117,31 @@ def check_file_needs_update(drive, local_path, file_name):
         # (Better to try uploading than to skip)
 
         # Only fetch size/date properties for files, not folders
+        # Skip if we determined this is a folder
+        if is_folder and not is_file:
+            # Don't try to get file metadata for folders
+            return True, False, None
+
+        # For files, try to get size and date if not already available
         if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
             try:
                 print(f"[?] Fetching file comparison metadata for: {sanitized_name}")
-                existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file"]).execute_query()
+                # Try a different approach - get item by ID to avoid URL encoding issues
+                # Use the existing item's ID if available
+                if hasattr(existing_file, 'id'):
+                    item_id = existing_file.id
+                    # Get fresh item data using the ID
+                    existing_file = drive.items.get_by_id(item_id).select(["size", "lastModifiedDateTime", "name", "file"]).get().execute_query()
+                else:
+                    # Fallback to the original method if no ID available
+                    existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file"]).execute_query()
             except Exception as select_error:
-                print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
+                error_str = str(select_error)
+                # Check if this is the specific dangerous path error
+                if "dangerous Request.Path" in error_str or "%3Ckey%3E" in error_str:
+                    print(f"[!] SharePoint API error, will re-upload to be safe: URL encoding issue")
+                else:
+                    print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
                 return True, False, None
             # File exists - compare metadata
             # Safely access size attribute with fallback
@@ -1300,27 +1334,32 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
         temp_file_created = False
         upload_path = local_path
 
-        # Only create temp copy if the actual file needs renaming (not for desired_name cases)
-        if not desired_name and sanitized_name != file_name:
-            # Create a temporary copy with the sanitized name
+        # Create temp copy with the correct sanitized name for SharePoint
+        if desired_name:
+            # When we have a desired_name (e.g., for HTML conversions), always create temp with sanitized name
+            # This ensures SharePoint gets the correct filename
+            # Use a unique subdirectory to avoid conflicts between multiple files with same name
+            temp_dir = tempfile.mkdtemp(prefix='sharepoint_upload_')
+            temp_path = os.path.join(temp_dir, sanitized_name)
+            shutil.copy2(local_path, temp_path)
+            upload_path = temp_path
+            temp_file_created = True
+            # Store the temp dir for cleanup
+            temp_dir_created = temp_dir
+        elif sanitized_name != file_name:
+            # For regular files, create temp copy only if sanitization changed the name
             temp_dir = tempfile.gettempdir()
             temp_path = os.path.join(temp_dir, sanitized_name)
             shutil.copy2(local_path, temp_path)
             upload_path = temp_path
             temp_file_created = True
-        elif desired_name and sanitized_name != desired_name:
-            # For HTML files from temp, we may need to create another temp with sanitized name
-            if sanitized_name != os.path.basename(local_path):
-                temp_dir = tempfile.gettempdir()
-                temp_path = os.path.join(temp_dir, sanitized_name)
-                shutil.copy2(local_path, temp_path)
-                upload_path = temp_path
-                temp_file_created = True
 
         # Perform the upload based on file size
         if file_size < effective_chunk_size:
             remote_file = drive.upload_file(upload_path).execute_query()
-            success_callback(remote_file, local_path)
+            # Pass the desired name for display if it was provided
+            display_name = desired_name if desired_name else os.path.basename(local_path)
+            success_callback(remote_file, local_path, display_name=display_name)
         else:
             # resumable_upload handles sanitization internally
             # This is only used for very large files now
@@ -1332,14 +1371,35 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
                 max_chunk_retry=60,
                 timeout_secs=10*60)
 
-        # Clean up temporary file if created
-        if temp_file_created and os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Clean up temporary file/directory if created
+        if temp_file_created:
+            if 'temp_dir_created' in locals() and os.path.exists(temp_dir_created):
+                # Clean up the entire temp directory for HTML files
+                shutil.rmtree(temp_dir_created)
+                # Silent cleanup for normal operations
+            elif os.path.exists(temp_path):
+                # Clean up individual temp file for regular files
+                os.remove(temp_path)
+                # Silent cleanup for normal operations
 
         # Update upload byte counter after successful upload
         upload_stats['bytes_uploaded'] += file_size
 
     except Exception as e:
+        # IMPORTANT: Clean up temp file even on failure to prevent conflicts
+        if temp_file_created:
+            try:
+                if 'temp_dir_created' in locals() and os.path.exists(temp_dir_created):
+                    # Clean up the entire temp directory for HTML files
+                    shutil.rmtree(temp_dir_created)
+                    print(f"[!] Cleaned up temp directory after error: {temp_dir_created}")
+                elif os.path.exists(temp_path):
+                    # Clean up individual temp file for regular files
+                    os.remove(temp_path)
+                    print(f"[!] Cleaned up temp file after error: {temp_path}")
+            except Exception as cleanup_error:
+                print(f"[!] Warning: Could not delete temp file/dir: {cleanup_error}")
+
         upload_stats['failed_files'] += 1
         raise e
 
@@ -1460,7 +1520,8 @@ for f in local_files:
                 html_content = convert_markdown_to_html(md_content, os.path.basename(f))
 
                 # Create HTML file in temp directory to avoid permission issues
-                temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix=os.path.basename(f).replace('.md', '_'))
+                # Use a simple prefix to avoid confusion - the actual filename will be set during upload
+                temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix='converted_md_')
 
                 try:
                     # Write HTML file to temp location
