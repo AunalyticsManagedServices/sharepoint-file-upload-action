@@ -576,24 +576,9 @@ def convert_markdown_to_html(md_content, filename):
             vertical-align: middle;
         }}
 
-        /* Note about conversion */
-        .conversion-note {{
-            background: #f6f8fa;
-            border: 1px solid #d1d9e0;
-            border-radius: 6px;
-            padding: 12px;
-            margin-bottom: 16px;
-            font-size: 14px;
-            color: #59636e;
-        }}
     </style>
 </head>
 <body>
-    <div class="conversion-note">
-        This document was automatically converted from Markdown for optimal SharePoint viewing.
-        Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC
-    </div>
-
     {html_body}
 </body>
 </html>'''
@@ -1677,10 +1662,18 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
                         break
 
                 if uploaded_file:
+                    # First, we need to load the listitem_allfields property
+                    # This property isn't automatically available on DriveItem objects
+                    uploaded_file.get().select(["id", "name"]).execute_query()
+
+                    # Now access and load the list item with its properties
                     list_item = uploaded_file.listitem_allfields
+                    list_item.get().execute_query()
+
+                    # Set the FileHash property and update
                     list_item.set_property("FileHash", local_hash)
                     list_item.update()
-                    drive.context.execute_query()
+                    uploaded_file.context.execute_query()
                     print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
                 else:
                     print(f"[!] Could not find uploaded file to set hash metadata")

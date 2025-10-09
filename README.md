@@ -135,6 +135,7 @@ Understanding glob patterns helps you select exactly which files to upload:
 | `docs/*` | All files directly in docs folder | `docs/readme.md`, `docs/config.json` |
 | `docs/**/*` | All files in docs and subfolders | `docs/api/spec.yaml`, `docs/guides/intro.md` |
 | `**/*.{md,txt}` | All markdown and text files | `readme.md`, `notes.txt`, `docs/guide.md` |
+| `**/*` | All files, subfolders, and subfiles | `All files and folders` |
 | `!**/*.test.*` | Exclude test files | Excludes `file.test.js`, `spec.test.md` |
 
 #### Glob Pattern Tips
