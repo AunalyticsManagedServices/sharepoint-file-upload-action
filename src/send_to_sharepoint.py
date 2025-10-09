@@ -44,6 +44,8 @@ import sys        # Provides access to command-line arguments and exit codes
 import os         # Operating system interface for file/directory operations
 import glob       # Unix-style pathname pattern expansion (e.g., *.txt matches all .txt files)
 import time       # Time-related functions for delays and timestamps
+import tempfile   # Temporary file and directory creation
+import shutil     # High-level file operations (copy, move, etc.)
 
 # Third-party library imports (need to be installed via pip)
 import msal       # Microsoft Authentication Library for Azure AD authentication
@@ -596,21 +598,71 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
                         print(f"Retry {retry_number}: {e}")
                         time.sleep(retry_seconds)
 
-    # Create DriveItem with conflictBehavior set to replace
-    # Use sanitized name for the URL path to avoid issues with special characters
-    return_type = DriveItem(
-        drive.context,
-        UrlPath(sanitized_name, drive.resource_path))
+    # Alternative approach: Use children.add() for upload session to avoid UrlPath issues
+    # This approach works better for files with multiple periods in the name
+    try:
+        # Create a new DriveItem as a child of the folder
+        return_type = drive.children.add()
+        return_type.set_property("name", sanitized_name)
+        return_type.set_property("file", {})
 
-    # Create upload session query with conflict behavior
-    upload_props = DriveItemUploadableProperties(name=sanitized_name)
-    # Set conflict behavior to replace existing files
-    upload_props.set_property("@microsoft.graph.conflictBehavior", "replace", False)
+        # Create upload session query with conflict behavior
+        upload_props = DriveItemUploadableProperties(name=sanitized_name)
+        # Set conflict behavior to replace existing files
+        upload_props.set_property("@microsoft.graph.conflictBehavior", "replace", False)
 
-    qry = UploadSessionQuery(return_type, {"item": upload_props})
-    drive.context.add_query(qry).after_query_execute(_start_upload)
-    return_type.get().execute_query()
-    success_callback(return_type, local_path)
+        qry = UploadSessionQuery(return_type, {"item": upload_props})
+        drive.context.add_query(qry).after_query_execute(_start_upload)
+        return_type.get().execute_query()
+        success_callback(return_type, local_path)
+    except Exception as e:
+        print(f"[!] Children.add() approach failed: {e}")
+
+        # Fallback: Try with the drive.upload method directly
+        # This bypasses the manual upload session creation entirely
+        print(f"[!] Attempting direct upload fallback for: {sanitized_name}")
+        try:
+            # For files > 4MB, we need to handle this differently
+            # Let's try uploading in smaller chunks using the regular upload
+            if file_size > 60*1024*1024:  # If > 60MB, fail
+                raise Exception("File too large for fallback upload")
+
+            # Create temporary file with sanitized name if needed
+            temp_file_created = False
+            upload_path = local_path
+
+            if sanitized_name != file_name:
+                temp_dir = tempfile.gettempdir()
+                temp_path = os.path.join(temp_dir, sanitized_name)
+                shutil.copy2(local_path, temp_path)
+                upload_path = temp_path
+                temp_file_created = True
+
+            # Use regular upload as fallback
+            remote_file = drive.upload_file(upload_path).execute_query()
+            success_callback(remote_file, local_path)
+
+            # Clean up temp file if created
+            if temp_file_created and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        except Exception as fallback_error:
+            print(f"[!] Fallback upload also failed: {fallback_error}")
+
+            # Last resort: Use the original UrlPath approach
+            # (keeping for compatibility with older library versions)
+            print(f"[!] Using original UrlPath approach as last resort")
+            return_type = DriveItem(
+                drive.context,
+                UrlPath(sanitized_name, drive.resource_path))
+
+            upload_props = DriveItemUploadableProperties(name=sanitized_name)
+            upload_props.set_property("@microsoft.graph.conflictBehavior", "replace", False)
+
+            qry = UploadSessionQuery(return_type, {"item": upload_props})
+            drive.context.add_query(qry).after_query_execute(_start_upload)
+            return_type.get().execute_query()
+            success_callback(return_type, local_path)
 
 def check_and_delete_existing_file(drive, file_name):
     """
@@ -703,14 +755,24 @@ def upload_file(drive, local_path, chunk_size):
             print(f"    (Original name: {file_name})")
 
     try:
+        # Special handling for files with periods in the name that might cause issues
+        # If the file has multiple periods or is an AppxBundle, try direct upload first
+        has_multiple_periods = file_name.count('.') > 1
+        is_appx_file = file_name.lower().endswith(('.appxbundle', '.appx', '.msixbundle', '.msix'))
+
+        # For problematic files, increase the chunk size threshold to 250MB
+        # This forces them to use regular upload instead of resumable for files under 250MB
+        effective_chunk_size = chunk_size
+        if has_multiple_periods or is_appx_file:
+            effective_chunk_size = 250 * 1024 * 1024  # 250MB
+            print(f"[!] Special file detected, using direct upload for files under 250MB")
+
         # Create a temporary file with the sanitized name if needed
         temp_file_created = False
         upload_path = local_path
 
         if sanitized_name != file_name:
             # Create a temporary copy with the sanitized name
-            import tempfile
-            import shutil
             temp_dir = tempfile.gettempdir()
             temp_path = os.path.join(temp_dir, sanitized_name)
             shutil.copy2(local_path, temp_path)
@@ -718,11 +780,12 @@ def upload_file(drive, local_path, chunk_size):
             temp_file_created = True
 
         # Perform the upload based on file size
-        if file_size < chunk_size:
+        if file_size < effective_chunk_size:
             remote_file = drive.upload_file(upload_path).execute_query()
             success_callback(remote_file, local_path)
         else:
             # resumable_upload handles sanitization internally
+            # This is only used for very large files now
             resumable_upload(
                 drive,
                 local_path,  # Pass original path, function will sanitize
