@@ -1085,10 +1085,8 @@ def check_file_needs_update(drive, local_path, file_name):
                 # An empty object {} won't have these attributes
                 if hasattr(folder_prop, 'childCount') or hasattr(folder_prop, 'child_count'):
                     is_folder = True
-                # If no childCount, check if it's truly an empty object
-                elif not hasattr(folder_prop, '__dict__') or (hasattr(folder_prop, '__dict__') and folder_prop.__dict__):
-                    # Has some attributes, likely a real folder
-                    is_folder = True
+                # Don't assume it's a folder just because the property exists
+                # Empty objects should not count as folders
 
         # Check if file property exists and has meaningful content
         if hasattr(existing_file, 'file'):
@@ -1099,16 +1097,28 @@ def check_file_needs_update(drive, local_path, file_name):
                 # Check if it's not just an empty object
                 if hasattr(file_prop, 'mimeType') or hasattr(file_prop, 'mime_type') or hasattr(file_prop, 'hashes'):
                     is_file = True
-                # If no specific file attributes, check if it has any content
-                elif not hasattr(file_prop, '__dict__') or (hasattr(file_prop, '__dict__') and file_prop.__dict__):
-                    # Has some attributes, likely a real file
-                    is_file = True
+                # Don't assume it's a file just because the property exists
+                # Empty objects should not count as files
 
-        # Log only if there's ambiguity
+        # If we can't determine from the properties, try a different approach
+        # Check if the item has a size attribute (files have size, folders typically don't)
+        if not is_folder and not is_file:
+            # If we have size already, it's likely a file
+            if hasattr(existing_file, 'size') and existing_file.size is not None and existing_file.size > 0:
+                is_file = True
+            # If neither property is populated, default to treating as file
+            # (better to attempt upload than to skip)
+            else:
+                print(f"[?] Cannot determine type for {sanitized_name}, treating as file")
+                is_file = True
+
+        # Log only if there's true ambiguity (both detected as populated)
         if is_folder and is_file:
-            print(f"[!] Warning: Item {sanitized_name} has both file and folder properties")
+            print(f"[!] Warning: Item {sanitized_name} appears to be both file and folder, treating as file")
+            # Prefer file treatment to allow upload attempt
+            is_folder = False
 
-        if is_folder and not is_file:
+        if is_folder:
             # It's definitely a folder
             print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
             return True, False, None
@@ -1126,15 +1136,9 @@ def check_file_needs_update(drive, local_path, file_name):
         if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
             try:
                 print(f"[?] Fetching file comparison metadata for: {sanitized_name}")
-                # Try a different approach - get item by ID to avoid URL encoding issues
-                # Use the existing item's ID if available
-                if hasattr(existing_file, 'id'):
-                    item_id = existing_file.id
-                    # Get fresh item data using the ID
-                    existing_file = drive.items.get_by_id(item_id).select(["size", "lastModifiedDateTime", "name", "file"]).get().execute_query()
-                else:
-                    # Fallback to the original method if no ID available
-                    existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file"]).execute_query()
+                # Try to refresh the item's properties
+                # Just use the existing_file object directly since we already have it
+                existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file", "folder"]).execute_query()
             except Exception as select_error:
                 error_str = str(select_error)
                 # Check if this is the specific dangerous path error
