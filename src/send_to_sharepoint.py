@@ -1,150 +1,344 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-SharePoint File Upload Script
+SharePoint File Upload Script for GitHub Actions
+================================================
 Compatible with Office365-REST-Python-Client v2.6.2+
 
-This script uploads files and directories to SharePoint/OneDrive while maintaining
-the directory structure. It handles folder creation, large file uploads with
-resumable sessions, and provides retry logic for reliability.
+PURPOSE:
+    This script automates file uploads from GitHub repositories to SharePoint/OneDrive,
+    typically used in CI/CD pipelines to sync documentation, reports, or build artifacts.
+
+SYNOPSIS:
+    python send_to_sharepoint.py <site_name> <sharepoint_host> <tenant_id>
+                                 <client_id> <client_secret> <upload_path>
+                                 <file_path> [options]
+
+DESCRIPTION:
+    - Uploads files and directories to SharePoint while preserving folder structure
+    - Automatically replaces existing files with newer versions
+    - Handles large files (>4MB) using resumable upload sessions
+    - Creates missing folders automatically in SharePoint
+    - Provides detailed logging and error reporting
+    - Supports recursive file matching with glob patterns
+
+REQUIREMENTS:
+    - Python 3.6 or higher
+    - office365-rest-python-client >= 2.6.2
+    - msal (Microsoft Authentication Library)
+    - Azure AD Enterprise Application with Graph API Sites.ReadWrite.All permission
+
+AUTHOR:
+    GitHub Actions SharePoint Integration
+
+VERSION:
+    2.0.0 - Added file replacement and enhanced error handling
 """
 
-import sys
-import os
-import msal
-import glob
-import time
-from office365.graph_client import GraphClient
-from office365.runtime.odata.v4.upload_session_request import UploadSessionRequest
-from office365.onedrive.driveitems.driveItem import DriveItem
-from office365.onedrive.internal.paths.url import UrlPath
-from office365.runtime.queries.upload_session import UploadSessionQuery
-from office365.onedrive.driveitems.uploadable_properties import DriveItemUploadableProperties
+# ====================================
+# IMPORTS - External libraries needed
+# ====================================
 
-site_name = sys.argv[1]
-sharepoint_host_name = sys.argv[2]
-tenant_id = sys.argv[3]
-client_id = sys.argv[4]
-client_secret = sys.argv[5]
-upload_path = sys.argv[6]
-file_path = sys.argv[7]
-max_retry = int(sys.argv[8]) or 3
-login_endpoint = sys.argv[9] or "login.microsoftonline.com"
-graph_endpoint = sys.argv[10] or "graph.microsoft.com"
+# Standard library imports (come with Python)
+import sys        # Provides access to command-line arguments and exit codes
+import os         # Operating system interface for file/directory operations
+import glob       # Unix-style pathname pattern expansion (e.g., *.txt matches all .txt files)
+import time       # Time-related functions for delays and timestamps
+
+# Third-party library imports (need to be installed via pip)
+import msal       # Microsoft Authentication Library for Azure AD authentication
+
+# Office365 library imports for SharePoint/OneDrive interaction
+from office365.graph_client import GraphClient  # Main client for Microsoft Graph API
+from office365.runtime.odata.v4.upload_session_request import UploadSessionRequest  # For large file uploads
+from office365.onedrive.driveitems.driveItem import DriveItem  # Represents files/folders in OneDrive
+from office365.onedrive.internal.paths.url import UrlPath  # URL path utilities
+from office365.runtime.queries.upload_session import UploadSessionQuery  # Upload session management
+from office365.onedrive.driveitems.uploadable_properties import DriveItemUploadableProperties  # File properties
+
+# ====================================================================
+# COMMAND-LINE ARGUMENTS PARSING
+# ====================================================================
+# sys.argv is a list containing command-line arguments
+# sys.argv[0] is the script name itself, so we start from index 1
+# Example: python script.py arg1 arg2 → sys.argv = ['script.py', 'arg1', 'arg2']
+
+# Required arguments (script will fail if these are missing)
+site_name = sys.argv[1]              # SharePoint site name (e.g., 'TeamDocuments')
+sharepoint_host_name = sys.argv[2]   # SharePoint domain (e.g., 'company.sharepoint.com')
+tenant_id = sys.argv[3]              # Azure AD tenant ID (GUID format)
+client_id = sys.argv[4]              # App registration client ID
+client_secret = sys.argv[5]          # App registration client secret (keep secure!)
+upload_path = sys.argv[6]            # Target folder in SharePoint (e.g., 'Documents/Reports')
+file_path = sys.argv[7]              # Local file/folder to upload (supports wildcards like *.pdf)
+
+# Optional arguments with default values
+# The 'or' operator returns the right value if left value is falsy (0, None, empty string)
+max_retry = int(sys.argv[8]) or 3    # Number of upload retries (default: 3)
+
+# Use default endpoints if not provided (for special Azure environments like GovCloud)
+login_endpoint = sys.argv[9] or "login.microsoftonline.com"    # Azure AD login URL
+graph_endpoint = sys.argv[10] or "graph.microsoft.com"         # Microsoft Graph API URL
+
+# Check if recursive flag is provided (for searching subdirectories)
+# len(sys.argv) > 11 ensures we don't get IndexError if argument doesn't exist
 file_path_recursive_match = sys.argv[11] if len(sys.argv) > 11 and sys.argv[11] else "False"
 
-# below used with 'get_by_url' in GraphClient calls
+# ====================================================================
+# URL AND CONFIGURATION SETUP
+# ====================================================================
+
+# Construct the full SharePoint site URL
+# f-strings (f"...") allow embedding variables directly in strings
 tenant_url = f'https://{sharepoint_host_name}/sites/{site_name}'
 
-# Convert string to boolean for recursive flag
+# Convert string argument to boolean for recursive file matching
+# .lower() converts to lowercase for case-insensitive comparison
 recursive = file_path_recursive_match.lower() in ['true', '1', 'yes']
 
-# Get all files and directories matching the pattern
+# ====================================================================
+# FILE DISCOVERY - Finding files to upload
+# ====================================================================
+
+# Use glob to find all files/directories matching the pattern
+# glob.glob() returns a list of paths matching a pathname pattern
+# Examples: '*.txt' finds all .txt files, '**/*.py' finds all .py files recursively
 local_items = glob.glob(file_path, recursive=recursive)
 
+# Exit with error if no matches found
 if not local_items:
     print(f"[Error] No files or directories matched pattern: {file_path}")
-    sys.exit(1)
+    sys.exit(1)  # Exit code 1 indicates error to calling process (e.g., GitHub Actions)
 
-# Separate files and directories
-local_files = []
-local_dirs = []
+# ====================================================================
+# FILE AND DIRECTORY SEPARATION
+# ====================================================================
 
+# Initialize empty lists to store files and directories separately
+local_files = []  # Will contain paths to actual files
+local_dirs = []   # Will contain paths to directories
+
+# Iterate through each matched item and categorize it
 for item in local_items:
-    if os.path.isfile(item):
-        local_files.append(item)
-    elif os.path.isdir(item):
-        local_dirs.append(item)
-        # If a directory is found, also get all files within it recursively
+    if os.path.isfile(item):  # Check if path points to a file
+        local_files.append(item)  # Add to files list
+    elif os.path.isdir(item):  # Check if path points to a directory
+        local_dirs.append(item)   # Add to directories list
+
+        # For directories, we need to get all files inside them
+        # os.walk() recursively traverses directory tree
+        # It yields (current_dir, subdirectories, files) for each directory
         for root, dirs, files in os.walk(item):
             for file in files:
+                # os.path.join() creates proper path regardless of OS (Windows/Mac/Linux)
+                # Windows uses backslash (\), Unix uses forward slash (/)
                 local_files.append(os.path.join(root, file))
 
+# Final validation - ensure we have something to upload
 if not local_files and not local_dirs:
     print(f"[Error] No files or directories found matching pattern: {file_path}")
     sys.exit(1)
 
+# Inform user about what was found
 print(f"Found {len(local_files)} file(s) and {len(local_dirs)} directory(ies) to process")
 
 def acquire_token():
     """
-    Acquire token via MSAL
+    Acquire an authentication token from Azure Active Directory using MSAL.
+
+    This function handles the OAuth 2.0 client credentials flow, which is used
+    for service-to-service authentication (no user interaction required).
+
+    Returns:
+        dict: Token dictionary containing:
+            - 'access_token': The JWT token to authenticate API calls
+            - 'token_type': Usually 'Bearer'
+            - 'expires_in': Token lifetime in seconds
+
+    Raises:
+        Exception: If authentication fails (wrong credentials, network issues, etc.)
+
+    Example:
+        token = acquire_token()
+        headers = {'Authorization': f"{token['token_type']} {token['access_token']}"}
+
+    Note:
+        This uses the client credentials flow, suitable for automated scripts.
+        The app registration must have Graph API Sites.ReadWrite.All permission.
     """
+    # Build the Azure AD authority URL
+    # Format: https://login.microsoftonline.com/{tenant_id}
     authority_url = f'https://{login_endpoint}/{tenant_id}'
+
+    # Create MSAL confidential client application
+    # 'Confidential' means it can securely store credentials (unlike public/mobile apps)
     app = msal.ConfidentialClientApplication(
-        authority=authority_url,
-        client_id=client_id,
-        client_credential=client_secret
+        authority=authority_url,           # Azure AD endpoint
+        client_id=client_id,              # Your app registration's ID
+        client_credential=client_secret    # Your app's secret key
     )
+
+    # Request an access token for Microsoft Graph API
+    # '/.default' scope means "use all permissions granted to this app"
     token = app.acquire_token_for_client(scopes=[f"https://{graph_endpoint}/.default"])
+
     return token
 
-#Replace office365 request url with the correct endpoint for non-default environments
 def rewrite_endpoint(request):
+    """
+    Modify API request URLs for non-standard Microsoft Graph endpoints.
+
+    This function is needed for special Azure environments like:
+    - Azure Government Cloud (graph.microsoft.us)
+    - Azure Germany (graph.microsoft.de)
+    - Azure China (microsoftgraph.chinacloudapi.cn)
+
+    Args:
+        request: The HTTP request object to be modified
+
+    Note:
+        This is a callback function used by the GraphClient to intercept
+        and modify requests before they're sent.
+    """
+    # Replace default endpoint with custom one if specified
     request.url = request.url.replace(
         "https://graph.microsoft.com", f"https://{graph_endpoint}"
     )
 
+# ====================================================================
+# MICROSOFT GRAPH CLIENT SETUP
+# ====================================================================
+
+# Initialize the Graph API client with our authentication function
+# GraphClient will call acquire_token() whenever it needs a fresh token
 client = GraphClient(acquire_token)
+
+# Register our endpoint rewriter to handle non-standard environments
+# The 'False' parameter means don't execute immediately
 client.before_execute(rewrite_endpoint, False)
 
-# Get the root drive folder where files will be uploaded
+# ====================================================================
+# SHAREPOINT CONNECTION AND SETUP
+# ====================================================================
+
+# Get the target folder in SharePoint where files will be uploaded
+# This chains multiple API calls:
+# 1. sites.get_by_url() - Gets the SharePoint site
+# 2. .drive - Gets the site's default document library
+# 3. .root - Gets the root folder of the drive
+# 4. .get_by_path() - Navigates to our target upload folder
 root_drive = client.sites.get_by_url(tenant_url).drive.root.get_by_path(upload_path)
 
-# Cache for created folders to avoid recreating them
+# ====================================================================
+# GLOBAL STATE TRACKING
+# ====================================================================
+
+# Dictionary to cache created folders (avoids redundant API calls)
+# Key: folder path, Value: DriveItem object
 created_folders = {}
+
+# Statistics tracker for upload summary
+# Using a dictionary makes it easy to pass by reference and update from functions
+upload_stats = {
+    'new_files': 0,       # Files that didn't exist in SharePoint
+    'replaced_files': 0,  # Files that were overwritten
+    'failed_files': 0     # Files that failed to upload
+}
 
 def ensure_folder_exists(parent_drive, folder_path):
     """
-    Recursively ensure that a folder structure exists in SharePoint
-    Returns the DriveItem for the final folder
+    Recursively create folder structure in SharePoint if it doesn't exist.
 
-    Compatible with Office365-REST-Python-Client v2.6.2
+    This function handles nested folder creation, ensuring the entire path
+    exists before uploading files. It uses caching to avoid redundant API calls.
+
+    Args:
+        parent_drive (DriveItem): The parent folder where structure should be created
+        folder_path (str): Path to create (e.g., 'folder1/folder2/folder3')
+
+    Returns:
+        DriveItem: The final folder in the path, ready to receive files
+
+    Raises:
+        Exception: If folder creation fails after all retry attempts
+
+    Example:
+        # Create nested folders
+        target = ensure_folder_exists(root_drive, "2024/Reports/January")
+        # Now upload file to the January folder
+        upload_file(target, "report.pdf", chunk_size)
+
+    Note:
+        - Caches created folders to minimize API calls
+        - Handles both forward slash (/) and backslash (\) path separators
+        - Compatible with Office365-REST-Python-Client v2.6.2+
     """
-    # Normalize path separators for cross-platform compatibility
+    # Convert Windows backslashes to forward slashes for consistency
+    # This ensures the function works on both Windows and Unix systems
     folder_path = folder_path.replace('\\', '/')
 
-    # If we've already created this folder, return it from cache
+    # Check cache first to avoid unnecessary API calls
+    # This significantly improves performance for large folder structures
     if folder_path in created_folders:
         return created_folders[folder_path]
 
-    # Split the path into components
-    path_parts = [part for part in folder_path.split('/') if part]  # Filter out empty parts
+    # Split path into individual folder names
+    # List comprehension filters out empty strings from split()
+    # Example: "a/b/c" becomes ['a', 'b', 'c']
+    path_parts = [part for part in folder_path.split('/') if part]
 
+    # If no folders to create, return the parent
     if not path_parts:
         return parent_drive
 
+    # Start from the parent folder
     current_drive = parent_drive
-    current_path = ""
+    current_path = ""  # Track the path we've built so far
 
+    # Process each folder in the path
     for folder_name in path_parts:
-        # Build the current path
+        # Build cumulative path as we go deeper
+        # Ternary operator: use "/" separator if current_path exists, else start fresh
         current_path = f"{current_path}/{folder_name}" if current_path else folder_name
 
-        # Check if we've already processed this path
+        # Skip if we've already processed this folder path
         if current_path in created_folders:
             current_drive = created_folders[current_path]
-            continue
+            continue  # Move to next folder in path
 
-        # Try to get the existing folder first
-        folder_found = False
+        # ============================================================
+        # STEP 1: Check if folder already exists in SharePoint
+        # ============================================================
+        folder_found = False  # Flag to track if folder exists
+
         try:
             print(f"[?] Checking if folder exists: {current_path}")
-            # Use children collection with filter to check existence
+
+            # Get all items (files and folders) in current folder
+            # execute_query() sends the API request and waits for response
             children = current_drive.children.get().execute_query()
 
+            # Iterate through children to find matching folder
             for child in children:
+                # Check two conditions:
+                # 1. Name matches what we're looking for
+                # 2. It's a folder (has 'folder' attribute), not a file
                 if child.name == folder_name and hasattr(child, 'folder'):
-                    # Folder exists
+                    # Folder found! Update references and cache it
                     current_drive = child
                     created_folders[current_path] = child
                     print(f"[✓] Folder already exists: {current_path}")
                     folder_found = True
-                    break
+                    break  # Stop searching once found
 
         except Exception as e:
+            # API call failed - assume folder doesn't exist
             print(f"[!] Error checking folder existence: {e}")
             folder_found = False
 
-        # Create folder if it doesn't exist
+        # ============================================================
+        # STEP 2: Create folder if it doesn't exist
+        # ============================================================
         if not folder_found:
             try:
                 print(f"[+] Creating folder: {current_path}")
@@ -208,11 +402,21 @@ def success_callback(remote_file, local_path):
     print(f"[✓] File {local_path} has been uploaded to {remote_file.web_url}")
 
 def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, timeout_secs):
+    """
+    Upload large files using resumable upload sessions.
+
+    :param drive: The DriveItem representing the target folder
+    :param local_path: Path to the local file to upload
+    :param file_size: Size of the file in bytes
+    :param chunk_size: Size of each chunk to upload
+    :param max_chunk_retry: Maximum retries for each chunk
+    :param timeout_secs: Total timeout in seconds
+    """
     def _start_upload():
         with open(local_path, "rb") as local_file:
             session_request = UploadSessionRequest(
-                local_file, 
-                chunk_size, 
+                local_file,
+                chunk_size,
                 lambda offset: progress_status(offset, file_size)
             )
             retry_seconds = timeout_secs / max_chunk_retry
@@ -226,30 +430,123 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
                             raise e
                         print(f"Retry {retry_number}: {e}")
                         time.sleep(retry_seconds)
-    
+
     file_name = os.path.basename(local_path)
+
+    # Create DriveItem with conflictBehavior set to replace
     return_type = DriveItem(
-        drive.context, 
+        drive.context,
         UrlPath(file_name, drive.resource_path))
-    qry = UploadSessionQuery(
-        return_type, {"item": DriveItemUploadableProperties(name=file_name)})
+
+    # Create upload session query with conflict behavior
+    upload_props = DriveItemUploadableProperties(name=file_name)
+    # Set conflict behavior to replace existing files
+    upload_props.set_property("@microsoft.graph.conflictBehavior", "replace", False)
+
+    qry = UploadSessionQuery(return_type, {"item": upload_props})
     drive.context.add_query(qry).after_query_execute(_start_upload)
     return_type.get().execute_query()
     success_callback(return_type, local_path)
 
+def check_and_delete_existing_file(drive, file_name):
+    """
+    Check if a file exists in SharePoint and delete it to enable replacement.
+
+    This function implements the "delete-then-upload" strategy to ensure
+    existing files are properly replaced with newer versions.
+
+    Args:
+        drive (DriveItem): The folder to check for existing file
+        file_name (str): Name of the file to check (e.g., 'report.pdf')
+
+    Returns:
+        bool: True if an existing file was deleted, False if no file existed
+
+    Example:
+        was_deleted = check_and_delete_existing_file(folder, "data.xlsx")
+        if was_deleted:
+            print("Replacing existing file")
+        else:
+            print("Uploading new file")
+
+    Note:
+        This function is necessary because the Office365 library's upload_file()
+        method doesn't overwrite existing files by default (known limitation).
+    """
+    try:
+        # Attempt to retrieve file by name from SharePoint
+        # get_by_path() navigates to the file, get() retrieves metadata
+        # execute_query() sends the API request
+        existing_file = drive.get_by_path(file_name).get().execute_query()
+
+        # Verify it's a file, not a folder with the same name
+        # Files don't have a 'folder' attribute, folders do
+        if not hasattr(existing_file, 'folder'):
+            print(f"[!] Existing file found: {file_name}")
+            print(f"[×] Deleting existing file to prepare for replacement...")
+
+            # Delete the file from SharePoint
+            # delete_object() marks for deletion, execute_query() performs it
+            existing_file.delete_object().execute_query()
+            print(f"[✓] Existing file deleted successfully")
+
+            # Brief pause to ensure SharePoint processes the deletion
+            # Some SharePoint instances need this to avoid conflicts
+            time.sleep(0.5)
+            return True  # Signal that file was replaced
+        else:
+            # Edge case: A folder exists with the same name as our file
+            print(f"[!] Found folder with same name as file: {file_name}")
+            return False
+
+    except Exception as e:
+        # Exception usually means file doesn't exist (404 error)
+        # This is expected for new files, so we return False
+        # Other errors (network, permissions) will be caught later
+        return False
+
 def upload_file(drive, local_path, chunk_size):
+    """
+    Upload a file to SharePoint/OneDrive, replacing any existing file.
+
+    :param drive: The DriveItem representing the target folder
+    :param local_path: Path to the local file to upload
+    :param chunk_size: Size threshold for using resumable upload
+    """
+    file_name = os.path.basename(local_path)
     file_size = os.path.getsize(local_path)
-    if file_size < chunk_size:
-        remote_file = drive.upload_file(local_path).execute_query()
-        success_callback(remote_file, local_path)
+
+    # Check for and delete any existing file with the same name
+    file_was_deleted = check_and_delete_existing_file(drive, file_name)
+
+    if file_was_deleted:
+        print(f"[→] Uploading replacement file: {file_name}")
     else:
-        resumable_upload(
-            drive, 
-            local_path, 
-            file_size, 
-            chunk_size, 
-            max_chunk_retry=60, 
-            timeout_secs=10*60)
+        print(f"[→] Uploading new file: {file_name}")
+
+    try:
+        # Perform the upload based on file size
+        if file_size < chunk_size:
+            remote_file = drive.upload_file(local_path).execute_query()
+            success_callback(remote_file, local_path)
+        else:
+            resumable_upload(
+                drive,
+                local_path,
+                file_size,
+                chunk_size,
+                max_chunk_retry=60,
+                timeout_secs=10*60)
+
+        # Update statistics after successful upload
+        if file_was_deleted:
+            upload_stats['replaced_files'] += 1
+        else:
+            upload_stats['new_files'] += 1
+
+    except Exception as e:
+        upload_stats['failed_files'] += 1
+        raise e
 
 def upload_file_with_structure(root_drive, local_file_path, base_path=""):
     """
@@ -281,48 +578,100 @@ def upload_file_with_structure(root_drive, local_file_path, base_path=""):
         target_folder = root_drive
     
     # Upload the file to the target folder
-    print(f"[→] Uploading {local_file_path} to SharePoint...")
+    print(f"[→] Processing file: {local_file_path}")
     for i in range(max_retry):
         try:
             upload_file(target_folder, local_file_path, 4*1024*1024)
             break
         except Exception as e:
-            print(f"Unexpected error occurred: {e}, {type(e)}")
+            print(f"[Error] Upload failed: {e}, {type(e)}")
             if i == max_retry - 1:
+                print(f"[Error] Failed to upload {local_file_path} after {max_retry} attempts")
                 raise e
             else:
-                print(f"Retrying... ({i+1}/{max_retry})")
+                print(f"[!] Retrying upload... ({i+1}/{max_retry})")
                 time.sleep(2)
 
-# Determine the base path for relative path calculation
-# This helps maintain the correct directory structure in SharePoint
-base_path = ""
+# ====================================================================
+# BASE PATH CALCULATION - For maintaining folder structure
+# ====================================================================
+# We need to determine the "base" path to strip from file paths
+# This preserves the relative folder structure when uploading
+
+base_path = ""  # Initialize empty base path
+
 if local_dirs:
-    # If we have directories, use the parent of the first directory as base
+    # If directories were selected, use the parent of the first directory
+    # Example: If uploading "/home/user/docs", base is "/home/user"
     base_path = os.path.dirname(local_dirs[0])
 elif local_files:
-    # If we only have files, use their common parent directory
+    # If only files were selected, find their common parent directory
+    # os.path.commonpath() finds the longest common path prefix
+    # Example: ["/a/b/file1.txt", "/a/b/c/file2.txt"] → "/a/b"
     base_path = os.path.dirname(os.path.commonpath(local_files))
 
-# First, execute the root_drive query to initialize it
+# ====================================================================
+# SHAREPOINT CONNECTION TEST
+# ====================================================================
+# Verify we can connect to SharePoint before processing files
+
 print("[*] Connecting to SharePoint...")
 try:
+    # Execute the query to test connection and permissions
+    # This also initializes the root_drive object for use
     root_drive.get().execute_query()
     print(f"[✓] Connected to SharePoint at: {upload_path}")
+
 except Exception as conn_error:
+    # Connection failed - provide helpful troubleshooting info
     print(f"[Error] Failed to connect to SharePoint: {conn_error}")
     print("[!] Ensure that:")
     print("    - Your credentials are correct")
     print("    - The site URL is correct")
     print("    - The upload path exists on the SharePoint site")
     print("    - You have appropriate permissions")
-    sys.exit(1)
+    sys.exit(1)  # Exit with error code
 
-# Upload all files with their directory structure
+# ====================================================================
+# MAIN UPLOAD LOOP - Process each file
+# ====================================================================
+# Iterate through all discovered files and upload them to SharePoint
+
 for f in local_files:
-    if os.path.isfile(f):  # Double-check it's a file
+    # Safety check: Verify item is still a file (not deleted/moved)
+    if os.path.isfile(f):
+        # Upload with folder structure preservation
         upload_file_with_structure(root_drive, f, base_path)
     else:
+        # File might have been deleted/moved since discovery
         print(f"[Warning] Skipping {f} as it's not a file")
 
-print(f"[✓] Upload process completed. Processed {len(local_files)} file(s)")
+# ====================================================================
+# FINAL SUMMARY REPORT
+# ====================================================================
+# Display upload statistics to the user/CI system
+
+# Create visual separator for better readability
+print("\n" + "="*60)
+print("[✓] UPLOAD PROCESS COMPLETED")
+print("="*60)
+
+# Show detailed statistics
+print(f"📊 Upload Statistics:")
+print(f"   • New files uploaded:      {upload_stats['new_files']}")
+print(f"   • Existing files replaced: {upload_stats['replaced_files']}")
+print(f"   • Failed uploads:          {upload_stats['failed_files']}")
+print(f"   • Total files processed:   {len(local_files)}")
+print("="*60)
+
+# ====================================================================
+# EXIT CODE HANDLING - For CI/CD integration
+# ====================================================================
+# Return appropriate exit code for GitHub Actions or other CI systems
+# Exit code 0 = success, 1 = failure
+
+if upload_stats['failed_files'] > 0:
+    # Some files failed - signal error to CI system
+    sys.exit(1)
+
+# If we get here, all uploads succeeded (exit code 0 is implicit)
