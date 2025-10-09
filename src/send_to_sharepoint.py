@@ -52,7 +52,6 @@ import glob       # Unix-style pathname pattern expansion (e.g., *.txt matches a
 import time       # Time-related functions for delays and retries
 import tempfile   # Temporary file and directory creation
 import shutil     # High-level file operations (copy, move, etc.)
-import hashlib    # For computing file hashes (MD5, SHA256, etc.)
 import xxhash     # For fast xxHash128 non-cryptographic hashing
 from datetime import datetime  # For HTML generation date/time display
 import requests   # For direct Graph API calls
@@ -61,10 +60,8 @@ import requests   # For direct Graph API calls
 from dotenv import load_dotenv  # Load environment variables from .env file
 import msal       # Microsoft Authentication Library for Azure AD authentication
 import mistune   # Fast markdown parser for converting MD to HTML
-from bs4 import BeautifulSoup  # HTML parsing and manipulation
 import subprocess # For running mermaid-cli to convert diagrams to SVG
 import re        # Regular expressions for pattern matching
-import base64    # For encoding SVG data as base64
 
 # Load environment variables from .env file if it exists
 # This allows local development and Docker to use consistent configuration
