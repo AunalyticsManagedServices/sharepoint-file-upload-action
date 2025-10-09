@@ -49,12 +49,12 @@ VERSION:
 import sys        # Provides access to command-line arguments and exit codes
 import os         # Operating system interface for file/directory operations
 import glob       # Unix-style pathname pattern expansion (e.g., *.txt matches all .txt files)
-import time       # Time-related functions for delays and timestamps
+import time       # Time-related functions for delays and retries
 import tempfile   # Temporary file and directory creation
 import shutil     # High-level file operations (copy, move, etc.)
 import hashlib    # For computing file hashes (MD5, SHA256, etc.)
 import xxhash     # For fast xxHash128 non-cryptographic hashing
-from datetime import datetime, timezone  # For timestamp comparisons
+from datetime import datetime  # For HTML generation date/time display
 import requests   # For direct Graph API calls
 
 # Third-party library imports (need to be installed via pip)
@@ -1263,14 +1263,9 @@ def check_file_needs_update(drive, local_path, file_name):
 
     # Get local file information
     local_size = os.path.getsize(local_path)
-    local_modified = os.path.getmtime(local_path)  # Unix timestamp (unreliable in Git/Docker)
 
     # Get debug flag
     debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
-
-    # Note: Since this always runs in Docker with Git-cloned files,
-    # timestamps are unreliable (all files have "now" as timestamp).
-    # We primarily rely on file size for comparison.
 
     # Debug: Show what we're checking
     print(f"[?] Checking if file exists in SharePoint: {sanitized_name}")
@@ -1279,7 +1274,7 @@ def check_file_needs_update(drive, local_path, file_name):
         # Get all children in the folder to find our file
         # This is more reliable than get_by_path for some SharePoint configurations
         # Request all needed properties upfront to avoid secondary queries
-        children = drive.children.get().select(["name", "file", "folder", "size", "lastModifiedDateTime", "id"]).execute_query()
+        children = drive.children.get().select(["name", "file", "folder", "size", "id"]).execute_query()
 
         existing_file = None
         for child in children:
@@ -1392,13 +1387,13 @@ def check_file_needs_update(drive, local_path, file_name):
 
         # If hash comparison wasn't available, fall back to size comparison
         if not hash_comparison_available:
-            # For files, try to get size and date if not already available
-            if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
+            # For files, try to get size if not already available
+            if not hasattr(existing_file, 'size'):
                 try:
                     print(f"[?] Fetching file size for comparison: {sanitized_name}")
                     # Try to refresh the item's properties
                     # Just use the existing_file object directly since we already have it
-                    existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file", "folder"]).execute_query()
+                    existing_file = existing_file.get().select(["size", "name", "file", "folder"]).execute_query()
                 except Exception as select_error:
                     error_str = str(select_error)
                     # Check if this is the specific dangerous path error
@@ -1446,103 +1441,16 @@ def check_file_needs_update(drive, local_path, file_name):
                 print(f"[DEBUG] Object attributes: {[attr for attr in dir(existing_file) if not attr.startswith('_')][:20]}...")
                 return True, True, existing_file, local_hash
 
-            # Parse SharePoint's timestamp (try multiple property names)
-            remote_modified_str = None
-            remote_modified = 0
-
-            # Debug: Log timestamp properties (use same debug flag)
-            if debug_metadata:
-                print(f"[DEBUG] Timestamp properties for {sanitized_name}:")
-                print(f"  - Has 'lastModifiedDateTime': {hasattr(existing_file, 'lastModifiedDateTime')}, value: {getattr(existing_file, 'lastModifiedDateTime', 'N/A')}")
-                print(f"  - Has 'time_last_modified': {hasattr(existing_file, 'time_last_modified')}, value: {getattr(existing_file, 'time_last_modified', 'N/A')}")
-
-            # Try Graph API property names
-            if hasattr(existing_file, 'lastModifiedDateTime'):
-                remote_modified_str = existing_file.lastModifiedDateTime
-                if debug_metadata:
-                    print(f"[DEBUG] Got timestamp string from 'lastModifiedDateTime': {remote_modified_str}")
-            # Try SharePoint property names
-            elif hasattr(existing_file, 'time_last_modified') and existing_file.time_last_modified:
-                # This might return a datetime object or a string
-                time_val = existing_file.time_last_modified
-                if debug_metadata:
-                    print(f"[DEBUG] time_last_modified type: {type(time_val).__name__}, value: {time_val}")
-
-                if isinstance(time_val, str):
-                    # It's a string, add to remote_modified_str for parsing
-                    remote_modified_str = time_val
-                    if debug_metadata:
-                        print(f"[DEBUG] time_last_modified is string, will parse: {time_val}")
-                elif hasattr(time_val, 'timestamp'):
-                    # It's a datetime object
-                    try:
-                        remote_modified = time_val.timestamp()
-                        if debug_metadata:
-                            print(f"[DEBUG] Converted datetime to timestamp: {remote_modified}")
-                    except (ValueError, AttributeError) as e:
-                        print(f"[!] Failed to convert datetime to timestamp: {e}")
-                        print(f"[DEBUG] DateTime value was: {time_val}, type: {type(time_val)}")
-                        pass
-                else:
-                    print(f"[!] time_last_modified has unexpected type: {type(time_val).__name__}")
-                    if debug_metadata:
-                        print(f"[DEBUG] Value: {time_val}")
-            # Try properties dictionary
-            elif hasattr(existing_file, 'properties'):
-                remote_modified_str = existing_file.properties.get('lastModifiedDateTime') or existing_file.properties.get('TimeLastModified')
-                if remote_modified_str and debug_metadata:
-                    print(f"[DEBUG] Got timestamp from properties dict: {remote_modified_str}")
-
-            if remote_modified_str:
-                # Parse various timestamp formats SharePoint might return
-                try:
-                    # Try ISO format first: "2024-01-15T10:30:00Z"
-                    if 'T' in str(remote_modified_str):
-                        remote_modified_dt = datetime.fromisoformat(str(remote_modified_str).replace('Z', '+00:00'))
-                    # Try space-separated format: "2025-10-09 18:24:50"
-                    elif ' ' in str(remote_modified_str):
-                        remote_modified_dt = datetime.strptime(str(remote_modified_str), '%Y-%m-%d %H:%M:%S')
-                    # Try other common formats
-                    else:
-                        # Fallback to parsing as ISO without T
-                        remote_modified_dt = datetime.fromisoformat(str(remote_modified_str))
-
-                    remote_modified = remote_modified_dt.timestamp()
-                    if debug_metadata:
-                        print(f"[DEBUG] Parsed timestamp: {remote_modified_str} -> {remote_modified}")
-                except (ValueError, AttributeError) as e:
-                    # If parsing fails, log it and assume file needs update
-                    print(f"[!] Failed to parse timestamp '{remote_modified_str}': {e}")
-                    remote_modified = 0
-            # else: remote_modified already set above or defaults to 0
-
-            # Compare size and modification time
-            # We use a 2-second tolerance for modification times due to filesystem differences
+            # Compare file sizes only (hash comparison not available)
             size_matches = (local_size == remote_size)
-            time_matches = abs(local_modified - remote_modified) < 2  # 2-second tolerance
-
-            # File needs update logic depends on environment
-            if use_timestamp_comparison:
-                # Normal environment: Check both size and timestamp
-                needs_update = not size_matches or (local_modified > remote_modified + 2)
-            else:
-                # Git/Docker environment: Only check size (timestamps unreliable)
-                needs_update = not size_matches
-                if debug_metadata and not needs_update:
-                    print(f"[DEBUG] Size matches, skipping timestamp check in Git environment")
+            needs_update = not size_matches
 
             if not needs_update:
                 print(f"[=] File unchanged (size: {local_size:,} bytes): {sanitized_name}")
                 upload_stats['skipped_files'] += 1
                 upload_stats['bytes_skipped'] += local_size
             else:
-                if not size_matches:
-                    print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
-                elif use_timestamp_comparison:
-                    print(f"[*] File is newer locally: {sanitized_name}")
-                else:
-                    # This shouldn't happen in Git environment (size already checked)
-                    print(f"[*] File needs update: {sanitized_name}")
+                print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
 
             return needs_update, True, existing_file, local_hash
         else:
@@ -1556,13 +1464,6 @@ def check_file_needs_update(drive, local_path, file_name):
         error_str = str(e)
         if "404" in error_str or "not found" in error_str.lower() or "itemNotFound" in error_str:
             print(f"[+] New file to upload: {sanitized_name}")
-        elif "'str' object cannot be interpreted as an integer" in error_str:
-            # This is our metadata parsing error - file exists but we can't compare
-            print(f"[!] Metadata type conversion error for: {sanitized_name}")
-            print(f"[DEBUG] Error details: {e}")
-            print(f"[DEBUG] This usually means time_last_modified returned unexpected type")
-            print(f"[!] Will re-upload file to be safe")
-            return True, False, None, local_hash
         else:
             # Some other error occurred
             print(f"[?] Error checking file existence: {e}")
