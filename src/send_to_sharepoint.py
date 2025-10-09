@@ -1082,8 +1082,9 @@ def check_file_needs_update(drive, local_path, file_name):
             # Check if it's not None AND has actual content (like childCount)
             if folder_prop is not None:
                 # For folders, the folder property should have attributes like childCount
-                # An empty object {} won't have these attributes
-                if hasattr(folder_prop, 'childCount') or hasattr(folder_prop, 'child_count'):
+                # Check for multiple folder-specific attributes to be certain
+                if (hasattr(folder_prop, 'childCount') and folder_prop.childCount is not None) or \
+                   (hasattr(folder_prop, 'child_count') and folder_prop.child_count is not None):
                     is_folder = True
                 # Don't assume it's a folder just because the property exists
                 # Empty objects should not count as folders
@@ -1174,9 +1175,20 @@ def check_file_needs_update(drive, local_path, file_name):
             if hasattr(existing_file, 'lastModifiedDateTime'):
                 remote_modified_str = existing_file.lastModifiedDateTime
             # Try SharePoint property names
-            elif hasattr(existing_file, 'time_last_modified'):
-                # This returns a datetime object directly
-                remote_modified = existing_file.time_last_modified.timestamp() if existing_file.time_last_modified else 0
+            elif hasattr(existing_file, 'time_last_modified') and existing_file.time_last_modified:
+                # This might return a datetime object or a string
+                time_val = existing_file.time_last_modified
+                if isinstance(time_val, str):
+                    # It's a string, add to remote_modified_str for parsing
+                    remote_modified_str = time_val
+                elif hasattr(time_val, 'timestamp'):
+                    # It's a datetime object
+                    try:
+                        remote_modified = time_val.timestamp()
+                    except (ValueError, AttributeError):
+                        # If conversion fails, leave as 0
+                        pass
+                # else: Unknown type, leave remote_modified as 0
             # Try properties dictionary
             elif hasattr(existing_file, 'properties'):
                 remote_modified_str = existing_file.properties.get('lastModifiedDateTime') or existing_file.properties.get('TimeLastModified')
@@ -1222,6 +1234,10 @@ def check_file_needs_update(drive, local_path, file_name):
         error_str = str(e)
         if "404" in error_str or "not found" in error_str.lower() or "itemNotFound" in error_str:
             print(f"[+] New file to upload: {sanitized_name}")
+        elif "'str' object cannot be interpreted as an integer" in error_str:
+            # This is our metadata parsing error - file exists but we can't compare
+            print(f"[!] Metadata type error, will re-upload to be safe: {sanitized_name}")
+            return True, False, None
         else:
             # Some other error occurred
             print(f"[?] Error checking file existence: {e}")
