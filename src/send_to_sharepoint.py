@@ -56,12 +56,17 @@ import hashlib    # For computing file hashes (MD5, SHA256, etc.)
 from datetime import datetime, timezone  # For timestamp comparisons
 
 # Third-party library imports (need to be installed via pip)
+from dotenv import load_dotenv  # Load environment variables from .env file
 import msal       # Microsoft Authentication Library for Azure AD authentication
 import mistune   # Fast markdown parser for converting MD to HTML
 from bs4 import BeautifulSoup  # HTML parsing and manipulation
 import subprocess # For running mermaid-cli to convert diagrams to SVG
 import re        # Regular expressions for pattern matching
 import base64    # For encoding SVG data as base64
+
+# Load environment variables from .env file if it exists
+# This allows local development and Docker to use consistent configuration
+load_dotenv()
 
 # Office365 library imports for SharePoint/OneDrive interaction
 from office365.graph_client import GraphClient  # Main client for Microsoft Graph API
@@ -1152,46 +1157,87 @@ def check_file_needs_update(drive, local_path, file_name):
             # Try multiple ways to get size (different APIs use different property names)
             remote_size = None
 
+            # Debug: Log what properties are available (verbose mode)
+            debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
+            if debug_metadata:
+                print(f"[DEBUG] Available properties for {sanitized_name}:")
+                print(f"  - Has 'size' attr: {hasattr(existing_file, 'size')}, value: {getattr(existing_file, 'size', 'N/A')}")
+                print(f"  - Has 'length' attr: {hasattr(existing_file, 'length')}, value: {getattr(existing_file, 'length', 'N/A')}")
+                print(f"  - Has 'properties' dict: {hasattr(existing_file, 'properties')}")
+
+                if hasattr(existing_file, 'properties') and existing_file.properties:
+                    print(f"  - Properties dict keys: {list(existing_file.properties.keys())[:10]}...")  # First 10 keys
+
             # Try Graph API DriveItem properties
             if hasattr(existing_file, 'size') and existing_file.size is not None:
                 remote_size = existing_file.size
+                if debug_metadata:
+                    print(f"[DEBUG] Got size from 'size' property: {remote_size}")
             # Try SharePoint File properties
             elif hasattr(existing_file, 'length') and existing_file.length is not None:
                 remote_size = existing_file.length
+                if debug_metadata:
+                    print(f"[DEBUG] Got size from 'length' property: {remote_size}")
             # Try properties dictionary (dynamic properties)
             elif hasattr(existing_file, 'properties'):
                 remote_size = existing_file.properties.get('size') or existing_file.properties.get('Size') or existing_file.properties.get('length') or existing_file.properties.get('Length')
+                if remote_size and debug_metadata:
+                    print(f"[DEBUG] Got size from properties dict: {remote_size}")
 
             if remote_size is None:
-                # If we still can't get size, assume file needs update
-                print(f"[!] Cannot determine remote file size, will re-upload: {sanitized_name}")
+                # If we still can't get size, log detailed info
+                print(f"[!] Cannot determine remote file size for: {sanitized_name}")
+                print(f"[DEBUG] Object type: {type(existing_file).__name__}")
+                print(f"[DEBUG] Object attributes: {[attr for attr in dir(existing_file) if not attr.startswith('_')][:20]}...")
                 return True, True, existing_file
 
             # Parse SharePoint's timestamp (try multiple property names)
             remote_modified_str = None
             remote_modified = 0
 
+            # Debug: Log timestamp properties (use same debug flag)
+            if debug_metadata:
+                print(f"[DEBUG] Timestamp properties for {sanitized_name}:")
+                print(f"  - Has 'lastModifiedDateTime': {hasattr(existing_file, 'lastModifiedDateTime')}, value: {getattr(existing_file, 'lastModifiedDateTime', 'N/A')}")
+                print(f"  - Has 'time_last_modified': {hasattr(existing_file, 'time_last_modified')}, value: {getattr(existing_file, 'time_last_modified', 'N/A')}")
+
             # Try Graph API property names
             if hasattr(existing_file, 'lastModifiedDateTime'):
                 remote_modified_str = existing_file.lastModifiedDateTime
+                if debug_metadata:
+                    print(f"[DEBUG] Got timestamp string from 'lastModifiedDateTime': {remote_modified_str}")
             # Try SharePoint property names
             elif hasattr(existing_file, 'time_last_modified') and existing_file.time_last_modified:
                 # This might return a datetime object or a string
                 time_val = existing_file.time_last_modified
+                if debug_metadata:
+                    print(f"[DEBUG] time_last_modified type: {type(time_val).__name__}, value: {time_val}")
+
                 if isinstance(time_val, str):
                     # It's a string, add to remote_modified_str for parsing
                     remote_modified_str = time_val
+                    if debug_metadata:
+                        print(f"[DEBUG] time_last_modified is string, will parse: {time_val}")
                 elif hasattr(time_val, 'timestamp'):
                     # It's a datetime object
                     try:
                         remote_modified = time_val.timestamp()
-                    except (ValueError, AttributeError):
-                        # If conversion fails, leave as 0
+                        if debug_metadata:
+                            print(f"[DEBUG] Converted datetime to timestamp: {remote_modified}")
+                    except (ValueError, AttributeError) as e:
+                        print(f"[!] Failed to convert datetime to timestamp: {e}")
+                        print(f"[DEBUG] DateTime value was: {time_val}, type: {type(time_val)}")
                         pass
-                # else: Unknown type, leave remote_modified as 0
+                else:
+                    print(f"[!] time_last_modified has unexpected type: {type(time_val).__name__}")
+                    if debug_metadata:
+                        print(f"[DEBUG] Value: {time_val}")
             # Try properties dictionary
             elif hasattr(existing_file, 'properties'):
                 remote_modified_str = existing_file.properties.get('lastModifiedDateTime') or existing_file.properties.get('TimeLastModified')
+                if remote_modified_str and debug_metadata:
+                    print(f"[DEBUG] Got timestamp from properties dict: {remote_modified_str}")
 
             if remote_modified_str:
                 # Convert ISO format to timestamp for comparison
@@ -1236,11 +1282,16 @@ def check_file_needs_update(drive, local_path, file_name):
             print(f"[+] New file to upload: {sanitized_name}")
         elif "'str' object cannot be interpreted as an integer" in error_str:
             # This is our metadata parsing error - file exists but we can't compare
-            print(f"[!] Metadata type error, will re-upload to be safe: {sanitized_name}")
+            print(f"[!] Metadata type conversion error for: {sanitized_name}")
+            print(f"[DEBUG] Error details: {e}")
+            print(f"[DEBUG] This usually means time_last_modified returned unexpected type")
+            print(f"[!] Will re-upload file to be safe")
             return True, False, None
         else:
             # Some other error occurred
             print(f"[?] Error checking file existence: {e}")
+            print(f"[DEBUG] Error type: {type(e).__name__}")
+            print(f"[DEBUG] Full error: {error_str[:500]}")  # First 500 chars
             print(f"[+] Assuming new file: {sanitized_name}")
         return True, False, None
 
