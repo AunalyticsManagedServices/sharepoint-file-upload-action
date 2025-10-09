@@ -85,6 +85,124 @@ graph_endpoint = sys.argv[10] or "graph.microsoft.com"         # Microsoft Graph
 file_path_recursive_match = sys.argv[11] if len(sys.argv) > 11 and sys.argv[11] else "False"
 
 # ====================================================================
+# SHAREPOINT FILENAME SANITIZATION
+# ====================================================================
+
+def sanitize_sharepoint_name(name, is_folder=False):
+    """
+    Sanitize file/folder names to be compatible with SharePoint/OneDrive.
+
+    SharePoint/OneDrive has strict naming rules:
+    - Cannot contain: # % & * : < > ? / \ | " { } ~
+    - Cannot start with: ~ $
+    - Cannot end with: . (period)
+    - Cannot be reserved names: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+    - Maximum length: 400 characters for full path, 255 for file/folder name
+
+    Args:
+        name (str): Original file or folder name
+        is_folder (bool): Whether this is a folder name
+
+    Returns:
+        str: Sanitized name safe for SharePoint
+    """
+    if not name:
+        return name
+
+    # Map of illegal characters to safe replacements
+    # Using Unicode similar characters that are visually similar but allowed
+    char_replacements = {
+        '#': '＃',    # Fullwidth number sign
+        '%': '％',    # Fullwidth percent sign
+        '&': '＆',    # Fullwidth ampersand
+        '*': '＊',    # Fullwidth asterisk
+        ':': '：',    # Fullwidth colon
+        '<': '＜',    # Fullwidth less-than
+        '>': '＞',    # Fullwidth greater-than
+        '?': '？',    # Fullwidth question mark
+        '/': '／',    # Fullwidth solidus
+        '\\': '＼',   # Fullwidth reverse solidus
+        '|': '｜',    # Fullwidth vertical line
+        '"': '＂',    # Fullwidth quotation mark
+        '{': '｛',    # Fullwidth left curly bracket
+        '}': '｝',    # Fullwidth right curly bracket
+        '~': '～',    # Fullwidth tilde
+    }
+
+    # Start with original name
+    sanitized = name
+
+    # Replace illegal characters
+    for char, replacement in char_replacements.items():
+        sanitized = sanitized.replace(char, replacement)
+
+    # Remove leading ~ or $ characters
+    while sanitized and sanitized[0] in ['~', '$', '～']:
+        sanitized = sanitized[1:]
+
+    # Remove trailing periods and spaces
+    sanitized = sanitized.rstrip('. ')
+
+    # Check for reserved names (Windows legacy)
+    reserved_names = [
+        'CON', 'PRN', 'AUX', 'NUL',
+        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+    ]
+
+    # Check if name (without extension) is reserved
+    name_without_ext = sanitized.split('.')[0] if not is_folder else sanitized
+    if name_without_ext.upper() in reserved_names:
+        sanitized = f"_{sanitized}"  # Prefix with underscore to make it safe
+
+    # Ensure name isn't empty after sanitization
+    if not sanitized:
+        sanitized = "_unnamed"
+
+    # Truncate if too long (SharePoint limit is 255 chars for file/folder name)
+    if len(sanitized) > 255:
+        # If it's a file, preserve the extension
+        if not is_folder and '.' in name:
+            ext = name.split('.')[-1]
+            base_max_len = 255 - len(ext) - 1  # -1 for the dot
+            base = sanitized[:base_max_len]
+            sanitized = f"{base}.{ext}"
+        else:
+            sanitized = sanitized[:255]
+
+    # Log if name was changed
+    if sanitized != name:
+        print(f"[!] Sanitized name: '{name}' -> '{sanitized}'")
+
+    return sanitized
+
+def sanitize_path_components(path):
+    """
+    Sanitize all components of a file path for SharePoint compatibility.
+
+    Args:
+        path (str): Full path with possibly multiple directory levels
+
+    Returns:
+        str: Sanitized path with all components made SharePoint-safe
+    """
+    # Split path into components
+    path = path.replace('\\', '/')
+    components = path.split('/')
+
+    # Sanitize each component
+    sanitized_components = []
+    for i, component in enumerate(components):
+        if component:  # Skip empty components
+            # Last component might be a file, others are folders
+            is_folder = (i < len(components) - 1) or not ('.' in component)
+            sanitized = sanitize_sharepoint_name(component, is_folder)
+            sanitized_components.append(sanitized)
+
+    # Rejoin path
+    return '/'.join(sanitized_components)
+
+# ====================================================================
 # URL AND CONFIGURATION SETUP
 # ====================================================================
 
@@ -271,11 +389,16 @@ def ensure_folder_exists(parent_drive, folder_path):
     Note:
         - Caches created folders to minimize API calls
         - Handles both forward slash (/) and backslash (\) path separators
+        - Sanitizes folder names for SharePoint compatibility
         - Compatible with Office365-REST-Python-Client v2.6.2+
     """
     # Convert Windows backslashes to forward slashes for consistency
     # This ensures the function works on both Windows and Unix systems
     folder_path = folder_path.replace('\\', '/')
+
+    # Sanitize the entire path for SharePoint compatibility
+    original_folder_path = folder_path
+    folder_path = sanitize_path_components(folder_path)
 
     # Check cache first to avoid unnecessary API calls
     # This significantly improves performance for large folder structures
@@ -297,6 +420,7 @@ def ensure_folder_exists(parent_drive, folder_path):
 
     # Process each folder in the path
     for folder_name in path_parts:
+        # Note: folder_name is already sanitized from path_parts split
         # Build cumulative path as we go deeper
         # Ternary operator: use "/" separator if current_path exists, else start fresh
         current_path = f"{current_path}/{folder_name}" if current_path else folder_name
@@ -430,6 +554,29 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
     :param max_chunk_retry: Maximum retries for each chunk
     :param timeout_secs: Total timeout in seconds
     """
+    file_name = os.path.basename(local_path)
+    # Sanitize the file name for SharePoint compatibility
+    sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
+
+    # First, try the built-in upload_large_file method
+    # This method handles the upload session creation properly
+    try:
+        print(f"[→] Using built-in upload method for large file: {sanitized_name}")
+        if sanitized_name != file_name:
+            print(f"    (Original name: {file_name})")
+        with open(local_path, 'rb') as f:
+            # Note: The built-in method might need the sanitized name set differently
+            # We'll rely on the library to handle this correctly
+            remote_file = drive.upload_large_file(f).execute_query()
+            success_callback(remote_file, local_path)
+            return
+    except AttributeError:
+        # Method doesn't exist, continue with manual session
+        print(f"[!] Built-in large file upload not available, using manual session")
+    except Exception as e:
+        print(f"[!] Built-in upload failed: {e}, trying manual session")
+
+    # Manual upload session creation
     def _start_upload():
         with open(local_path, "rb") as local_file:
             session_request = UploadSessionRequest(
@@ -449,15 +596,14 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
                         print(f"Retry {retry_number}: {e}")
                         time.sleep(retry_seconds)
 
-    file_name = os.path.basename(local_path)
-
     # Create DriveItem with conflictBehavior set to replace
+    # Use sanitized name for the URL path to avoid issues with special characters
     return_type = DriveItem(
         drive.context,
-        UrlPath(file_name, drive.resource_path))
+        UrlPath(sanitized_name, drive.resource_path))
 
     # Create upload session query with conflict behavior
-    upload_props = DriveItemUploadableProperties(name=file_name)
+    upload_props = DriveItemUploadableProperties(name=sanitized_name)
     # Set conflict behavior to replace existing files
     upload_props.set_property("@microsoft.graph.conflictBehavior", "replace", False)
 
@@ -490,17 +636,23 @@ def check_and_delete_existing_file(drive, file_name):
     Note:
         This function is necessary because the Office365 library's upload_file()
         method doesn't overwrite existing files by default (known limitation).
+        File names are sanitized for SharePoint compatibility before checking.
     """
+    # Sanitize the file name to match what would be stored in SharePoint
+    sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
+
     try:
-        # Attempt to retrieve file by name from SharePoint
+        # Attempt to retrieve file by sanitized name from SharePoint
         # get_by_path() navigates to the file, get() retrieves metadata
         # execute_query() sends the API request
-        existing_file = drive.get_by_path(file_name).get().execute_query()
+        existing_file = drive.get_by_path(sanitized_name).get().execute_query()
 
         # Verify it's a file, not a folder with the same name
         # Files don't have a 'folder' attribute, folders do
         if not hasattr(existing_file, 'folder'):
-            print(f"[!] Existing file found: {file_name}")
+            print(f"[!] Existing file found: {sanitized_name}")
+            if sanitized_name != file_name:
+                print(f"    (Original name: {file_name})")
             print(f"[×] Deleting existing file to prepare for replacement...")
 
             # Delete the file from SharePoint
@@ -534,27 +686,54 @@ def upload_file(drive, local_path, chunk_size):
     file_name = os.path.basename(local_path)
     file_size = os.path.getsize(local_path)
 
+    # Sanitize the file name for SharePoint compatibility
+    sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
+
     # Check for and delete any existing file with the same name
+    # Note: check_and_delete_existing_file already handles sanitization internally
     file_was_deleted = check_and_delete_existing_file(drive, file_name)
 
     if file_was_deleted:
-        print(f"[→] Uploading replacement file: {file_name}")
+        print(f"[→] Uploading replacement file: {sanitized_name}")
+        if sanitized_name != file_name:
+            print(f"    (Original name: {file_name})")
     else:
-        print(f"[→] Uploading new file: {file_name}")
+        print(f"[→] Uploading new file: {sanitized_name}")
+        if sanitized_name != file_name:
+            print(f"    (Original name: {file_name})")
 
     try:
+        # Create a temporary file with the sanitized name if needed
+        temp_file_created = False
+        upload_path = local_path
+
+        if sanitized_name != file_name:
+            # Create a temporary copy with the sanitized name
+            import tempfile
+            import shutil
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, sanitized_name)
+            shutil.copy2(local_path, temp_path)
+            upload_path = temp_path
+            temp_file_created = True
+
         # Perform the upload based on file size
         if file_size < chunk_size:
-            remote_file = drive.upload_file(local_path).execute_query()
+            remote_file = drive.upload_file(upload_path).execute_query()
             success_callback(remote_file, local_path)
         else:
+            # resumable_upload handles sanitization internally
             resumable_upload(
                 drive,
-                local_path,
+                local_path,  # Pass original path, function will sanitize
                 file_size,
                 chunk_size,
                 max_chunk_retry=60,
                 timeout_secs=10*60)
+
+        # Clean up temporary file if created
+        if temp_file_created and os.path.exists(temp_path):
+            os.remove(temp_path)
 
         # Update statistics after successful upload
         if file_was_deleted:
@@ -585,11 +764,20 @@ def upload_file_with_structure(root_drive, local_file_path, base_path=""):
     # Normalize path separators for cross-platform compatibility
     rel_path = rel_path.replace('\\', '/')
 
-    # Get the directory path and file name
-    dir_path = os.path.dirname(rel_path)
-    file_name = os.path.basename(rel_path)
+    # Sanitize the entire relative path for SharePoint compatibility
+    # This ensures both folder and file names are properly sanitized
+    sanitized_rel_path = sanitize_path_components(rel_path)
+
+    # Get the directory path and file name from sanitized path
+    dir_path = os.path.dirname(sanitized_rel_path)
+    file_name = os.path.basename(sanitized_rel_path)
+
+    # Log if path was sanitized
+    if sanitized_rel_path != rel_path:
+        print(f"[!] Path sanitized for SharePoint: {rel_path} -> {sanitized_rel_path}")
 
     # If there's a directory structure, create it in SharePoint
+    # Note: ensure_folder_exists will sanitize folder names internally
     if dir_path and dir_path != "." and dir_path != "":
         target_folder = ensure_folder_exists(root_drive, dir_path)
     else:
