@@ -1240,13 +1240,25 @@ def check_file_needs_update(drive, local_path, file_name):
                     print(f"[DEBUG] Got timestamp from properties dict: {remote_modified_str}")
 
             if remote_modified_str:
-                # Convert ISO format to timestamp for comparison
-                # SharePoint returns: "2024-01-15T10:30:00Z"
+                # Parse various timestamp formats SharePoint might return
                 try:
-                    remote_modified_dt = datetime.fromisoformat(remote_modified_str.replace('Z', '+00:00'))
+                    # Try ISO format first: "2024-01-15T10:30:00Z"
+                    if 'T' in str(remote_modified_str):
+                        remote_modified_dt = datetime.fromisoformat(str(remote_modified_str).replace('Z', '+00:00'))
+                    # Try space-separated format: "2025-10-09 18:24:50"
+                    elif ' ' in str(remote_modified_str):
+                        remote_modified_dt = datetime.strptime(str(remote_modified_str), '%Y-%m-%d %H:%M:%S')
+                    # Try other common formats
+                    else:
+                        # Fallback to parsing as ISO without T
+                        remote_modified_dt = datetime.fromisoformat(str(remote_modified_str))
+
                     remote_modified = remote_modified_dt.timestamp()
-                except (ValueError, AttributeError):
-                    # If parsing fails, assume file needs update
+                    if debug_metadata:
+                        print(f"[DEBUG] Parsed timestamp: {remote_modified_str} -> {remote_modified}")
+                except (ValueError, AttributeError) as e:
+                    # If parsing fails, log it and assume file needs update
+                    print(f"[!] Failed to parse timestamp '{remote_modified_str}': {e}")
                     remote_modified = 0
             # else: remote_modified already set above or defaults to 0
 
