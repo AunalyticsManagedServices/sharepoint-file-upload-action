@@ -43,6 +43,10 @@ inputs:
     description: 'Force upload all files regardless of changes (skips smart sync comparison)'
     required: false
     default: "false"
+  convert_md_to_html:
+    description: 'Convert Markdown files to HTML with Mermaid diagrams as SVG (best for SharePoint viewing)'
+    required: false
+    default: "true"
 outputs:
   return:
     description: 'Function output'
@@ -64,3 +68,4 @@ runs:
     - ${{ inputs.graph_endpoint }}
     - ${{ inputs.file_path_recursive_match }}
     - ${{ inputs.force_upload }}
+    - ${{ inputs.convert_md_to_html }}

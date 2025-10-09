@@ -14,11 +14,14 @@ SYNOPSIS:
                                  <client_id> <client_secret> <upload_path>
                                  <file_path> [max_retry] [login_endpoint]
                                  [graph_endpoint] [recursive] [force_upload]
+                                 [convert_md_to_html]
 
 DESCRIPTION:
     - Intelligently syncs files to SharePoint, skipping unchanged files
     - Compares file size and modification time to detect changes
     - Uploads only new or modified files, saving time and bandwidth
+    - Converts Markdown files to HTML with embedded SVG diagrams
+    - Renders Mermaid diagrams as static SVG for SharePoint compatibility
     - Handles large files (>4MB) using resumable upload sessions
     - Creates missing folders automatically in SharePoint
     - Provides detailed statistics on uploads, updates, and skipped files
@@ -32,10 +35,10 @@ REQUIREMENTS:
     - Azure AD Enterprise Application with Graph API Sites.ReadWrite.All permission
 
 AUTHOR:
-    GitHub Actions SharePoint Integration
+    Mark Newton
 
 VERSION:
-    2.0.0 - Added file replacement and enhanced error handling
+    3.0.0 - Added smart sync, markdown to HTML conversion with Mermaid SVG support
 """
 
 # ====================================
@@ -54,6 +57,11 @@ from datetime import datetime, timezone  # For timestamp comparisons
 
 # Third-party library imports (need to be installed via pip)
 import msal       # Microsoft Authentication Library for Azure AD authentication
+import mistune   # Fast markdown parser for converting MD to HTML
+from bs4 import BeautifulSoup  # HTML parsing and manipulation
+import subprocess # For running mermaid-cli to convert diagrams to SVG
+import re        # Regular expressions for pattern matching
+import base64    # For encoding SVG data as base64
 
 # Office365 library imports for SharePoint/OneDrive interaction
 from office365.graph_client import GraphClient  # Main client for Microsoft Graph API
@@ -94,6 +102,10 @@ file_path_recursive_match = sys.argv[11] if len(sys.argv) > 11 and sys.argv[11] 
 # Check if force upload flag is provided (skip file comparison)
 # len(sys.argv) > 12 ensures we don't get IndexError if argument doesn't exist
 force_upload_flag = sys.argv[12] if len(sys.argv) > 12 and sys.argv[12] else "False"
+
+# Check if markdown to HTML conversion flag is provided
+# len(sys.argv) > 13 ensures we don't get IndexError if argument doesn't exist
+convert_md_to_html_flag = sys.argv[13] if len(sys.argv) > 13 and sys.argv[13] else "True"
 
 # ====================================================================
 # SHAREPOINT FILENAME SANITIZATION
@@ -214,6 +226,315 @@ def sanitize_path_components(path):
     return '/'.join(sanitized_components)
 
 # ====================================================================
+# MARKDOWN TO HTML CONVERSION WITH MERMAID SUPPORT
+# ====================================================================
+
+def convert_mermaid_to_svg(mermaid_code):
+    """
+    Convert Mermaid diagram code to SVG using mermaid-cli.
+
+    Uses the mmdc command-line tool installed via npm to render
+    Mermaid diagrams as static SVG images.
+
+    Args:
+        mermaid_code (str): Mermaid diagram definition
+
+    Returns:
+        str: SVG content as string, or None if conversion fails
+    """
+    try:
+        # Create temporary files for input and output
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.mmd', delete=False) as mmd_file:
+            mmd_file.write(mermaid_code)
+            mmd_path = mmd_file.name
+
+        svg_path = mmd_path.replace('.mmd', '.svg')
+
+        # Run mermaid-cli to convert to SVG
+        # Using puppeteer config to work in Docker container
+        result = subprocess.run(
+            ['mmdc', '-i', mmd_path, '-o', svg_path, '--puppeteerConfigFile', '/usr/src/app/puppeteer-config.json'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode == 0 and os.path.exists(svg_path):
+            # Read the generated SVG
+            with open(svg_path, 'r', encoding='utf-8') as f:
+                svg_content = f.read()
+
+            # Clean up temporary files
+            os.unlink(mmd_path)
+            os.unlink(svg_path)
+
+            return svg_content
+        else:
+            print(f"[!] Mermaid conversion failed: {result.stderr}")
+            # Clean up temp file
+            if os.path.exists(mmd_path):
+                os.unlink(mmd_path)
+            if os.path.exists(svg_path):
+                os.unlink(svg_path)
+            return None
+
+    except Exception as e:
+        print(f"[!] Error converting Mermaid diagram: {e}")
+        return None
+
+def convert_markdown_to_html(md_content, filename):
+    """
+    Convert Markdown content to HTML with Mermaid diagrams rendered as SVG.
+
+    This function:
+    1. Parses markdown using Mistune
+    2. Finds and converts Mermaid code blocks to inline SVG
+    3. Applies GitHub-like styling for SharePoint viewing
+
+    Args:
+        md_content (str): Markdown content to convert
+        filename (str): Original filename for the HTML title
+
+    Returns:
+        str: Complete HTML document with embedded styles and SVGs
+    """
+    # First, extract and convert all mermaid blocks to placeholder SVGs
+    mermaid_pattern = r'```mermaid\n(.*?)\n```'
+    mermaid_blocks = []
+
+    def replace_mermaid_with_placeholder(match):
+        mermaid_code = match.group(1)
+        placeholder = f"<!--MERMAID_PLACEHOLDER_{len(mermaid_blocks)}-->"
+
+        # Convert to SVG
+        svg_content = convert_mermaid_to_svg(mermaid_code)
+        if svg_content:
+            # Clean up the SVG for inline embedding
+            # Remove XML declaration if present
+            svg_content = re.sub(r'<\?xml[^>]*\?>', '', svg_content)
+            svg_content = svg_content.strip()
+            mermaid_blocks.append(svg_content)
+        else:
+            # If conversion failed, keep as code block
+            mermaid_blocks.append(f'<pre><code>mermaid\n{mermaid_code}</code></pre>')
+
+        return placeholder
+
+    # Replace mermaid blocks with placeholders
+    md_with_placeholders = re.sub(mermaid_pattern, replace_mermaid_with_placeholder, md_content, flags=re.DOTALL)
+
+    # Convert markdown to HTML using Mistune
+    html_body = mistune.html(md_with_placeholders)
+
+    # Replace placeholders with actual SVG content
+    for i, svg_content in enumerate(mermaid_blocks):
+        placeholder = f"<!--MERMAID_PLACEHOLDER_{i}-->"
+        # Wrap SVG in a div for centering
+        wrapped_svg = f'<div class="mermaid-diagram">{svg_content}</div>'
+        html_body = html_body.replace(f"<p>{placeholder}</p>", wrapped_svg)
+        html_body = html_body.replace(placeholder, wrapped_svg)
+
+    # Create the complete HTML document
+    html_template = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{filename.replace('.md', '')}</title>
+
+    <style>
+        /* GitHub-like styling for SharePoint */
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+            font-size: 16px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            padding: 20px;
+            max-width: 980px;
+            margin: 0 auto;
+            color: #1F2328;
+            background: #ffffff;
+        }}
+
+        h1, h2, h3, h4, h5, h6 {{
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-weight: 600;
+            line-height: 1.25;
+        }}
+
+        h1 {{
+            font-size: 2em;
+            border-bottom: 1px solid #d1d9e0;
+            padding-bottom: .3em;
+        }}
+
+        h2 {{
+            font-size: 1.5em;
+            border-bottom: 1px solid #d1d9e0;
+            padding-bottom: .3em;
+        }}
+
+        h3 {{ font-size: 1.25em; }}
+        h4 {{ font-size: 1em; }}
+        h5 {{ font-size: .875em; }}
+        h6 {{ font-size: .85em; color: #59636e; }}
+
+        code {{
+            padding: .2em .4em;
+            margin: 0;
+            font-size: 85%;
+            white-space: break-spaces;
+            background-color: #f6f8fa;
+            border-radius: 6px;
+            font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+        }}
+
+        pre {{
+            padding: 16px;
+            overflow: auto;
+            font-size: 85%;
+            line-height: 1.45;
+            color: #1F2328;
+            background-color: #f6f8fa;
+            border-radius: 6px;
+            margin-top: 0;
+            margin-bottom: 16px;
+        }}
+
+        pre code {{
+            display: inline;
+            max-width: auto;
+            padding: 0;
+            margin: 0;
+            overflow: visible;
+            line-height: inherit;
+            word-wrap: normal;
+            background-color: transparent;
+            border: 0;
+        }}
+
+        blockquote {{
+            margin: 0;
+            padding: 0 1em;
+            color: #59636e;
+            border-left: .25em solid #d1d9e0;
+        }}
+
+        table {{
+            border-spacing: 0;
+            border-collapse: collapse;
+            display: block;
+            width: max-content;
+            max-width: 100%;
+            overflow: auto;
+            margin-top: 0;
+            margin-bottom: 16px;
+        }}
+
+        table th {{
+            font-weight: 600;
+            padding: 6px 13px;
+            border: 1px solid #d1d9e0;
+            background-color: #f6f8fa;
+        }}
+
+        table td {{
+            padding: 6px 13px;
+            border: 1px solid #d1d9e0;
+        }}
+
+        table tr:nth-child(2n) {{
+            background-color: #f6f8fa;
+        }}
+
+        ul, ol {{
+            margin-top: 0;
+            margin-bottom: 16px;
+            padding-left: 2em;
+        }}
+
+        ul ul, ul ol, ol ol, ol ul {{
+            margin-top: 0;
+            margin-bottom: 0;
+        }}
+
+        li > p {{
+            margin-top: 16px;
+        }}
+
+        a {{
+            color: #0969da;
+            text-decoration: none;
+        }}
+
+        a:hover {{
+            text-decoration: underline;
+        }}
+
+        hr {{
+            height: .25em;
+            padding: 0;
+            margin: 24px 0;
+            background-color: #d1d9e0;
+            border: 0;
+        }}
+
+        img {{
+            max-width: 100%;
+            box-sizing: content-box;
+        }}
+
+        /* Mermaid diagram container */
+        .mermaid-diagram {{
+            text-align: center;
+            margin: 16px 0;
+            padding: 16px;
+            background-color: #f6f8fa;
+            border-radius: 6px;
+            overflow-x: auto;
+        }}
+
+        .mermaid-diagram svg {{
+            max-width: 100%;
+            height: auto;
+        }}
+
+        /* Task list items */
+        .task-list-item {{
+            list-style-type: none;
+        }}
+
+        .task-list-item input {{
+            margin: 0 .2em .25em -1.4em;
+            vertical-align: middle;
+        }}
+
+        /* Note about conversion */
+        .conversion-note {{
+            background: #f6f8fa;
+            border: 1px solid #d1d9e0;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            color: #59636e;
+        }}
+    </style>
+</head>
+<body>
+    <div class="conversion-note">
+        This document was automatically converted from Markdown for optimal SharePoint viewing.
+        Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC
+    </div>
+
+    {html_body}
+</body>
+</html>'''
+
+    return html_template
+
+# ====================================================================
 # URL AND CONFIGURATION SETUP
 # ====================================================================
 
@@ -225,12 +546,19 @@ tenant_url = f'https://{sharepoint_host_name}/sites/{site_name}'
 # .lower() converts to lowercase for case-insensitive comparison
 recursive = file_path_recursive_match.lower() in ['true', '1', 'yes']
 force_upload = force_upload_flag.lower() in ['true', '1', 'yes']
+convert_md_to_html = convert_md_to_html_flag.lower() in ['true', '1', 'yes']
 
 # Show sync mode to user
 if force_upload:
     print("[!] Force upload mode enabled - all files will be uploaded regardless of changes")
 else:
-    print("[✓] Smart sync mode enabled - unchanged files will be skipped")
+    print("[OK] Smart sync mode enabled - unchanged files will be skipped")
+
+# Show markdown conversion mode
+if convert_md_to_html:
+    print("[OK] Markdown to HTML conversion enabled - .md files will be converted with Mermaid diagrams as SVG")
+else:
+    print("[!] Markdown to HTML conversion disabled - .md files will be uploaded as-is")
 
 # ====================================================================
 # FILE DISCOVERY - Finding files to upload
@@ -715,12 +1043,31 @@ def check_file_needs_update(drive, local_path, file_name):
     local_size = os.path.getsize(local_path)
     local_modified = os.path.getmtime(local_path)  # Unix timestamp
 
+    # Debug: Show what we're checking
+    print(f"[?] Checking if file exists in SharePoint: {sanitized_name}")
+
     try:
-        # Attempt to retrieve file metadata from SharePoint
-        existing_file = drive.get_by_path(sanitized_name).select(["size", "lastModifiedDateTime", "name"]).get().execute_query()
+        # Get all children in the folder to find our file
+        # This is more reliable than get_by_path for some SharePoint configurations
+        children = drive.children.get().execute_query()
+
+        existing_file = None
+        for child in children:
+            if child.name == sanitized_name:
+                existing_file = child
+                break
+
+        if existing_file is None:
+            # File not found in folder
+            print(f"[+] New file to upload: {sanitized_name}")
+            return True, False, None
+
+        # Get detailed metadata for the file
+        existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file", "folder"]).execute_query()
 
         # Verify it's a file, not a folder
-        if not hasattr(existing_file, 'folder'):
+        # In SharePoint, files have a 'file' property and folders have a 'folder' property
+        if hasattr(existing_file, 'file') and existing_file.file is not None:
             # File exists - compare metadata
             remote_size = existing_file.size
 
@@ -744,25 +1091,35 @@ def check_file_needs_update(drive, local_path, file_name):
             needs_update = not size_matches or (local_modified > remote_modified + 2)
 
             if not needs_update:
-                print(f"[≡] File unchanged (size: {local_size:,} bytes): {sanitized_name}")
+                print(f"[=] File unchanged (size: {local_size:,} bytes): {sanitized_name}")
                 upload_stats['skipped_files'] += 1
                 upload_stats['bytes_skipped'] += local_size
             else:
                 if not size_matches:
-                    print(f"[↻] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
+                    print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
                 else:
-                    print(f"[↻] File is newer locally: {sanitized_name}")
+                    print(f"[*] File is newer locally: {sanitized_name}")
 
             return needs_update, True, existing_file
-        else:
+        elif hasattr(existing_file, 'folder') and existing_file.folder is not None:
             # It's a folder with the same name, not a file
-            print(f"[!] Found folder with same name as file: {sanitized_name}")
+            print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
+            return True, False, None
+        else:
+            # Item exists but we can't determine its type
+            print(f"[?] Unable to determine type of existing item: {sanitized_name}")
             return True, False, None
 
     except Exception as e:
         # File doesn't exist in SharePoint (404 error is expected)
-        # Any other error will be caught and treated as "file doesn't exist"
-        print(f"[+] New file to upload: {sanitized_name}")
+        # Check if it's actually a 404 or another error
+        error_str = str(e)
+        if "404" in error_str or "not found" in error_str.lower() or "itemNotFound" in error_str:
+            print(f"[+] New file to upload: {sanitized_name}")
+        else:
+            # Some other error occurred
+            print(f"[?] Error checking file existence: {e}")
+            print(f"[+] Assuming new file: {sanitized_name}")
         return True, False, None
 
 def check_and_delete_existing_file(drive, file_name):
@@ -1030,11 +1387,56 @@ except Exception as conn_error:
 # ====================================================================
 # Iterate through all discovered files and upload them to SharePoint
 
+# Track converted files to avoid uploading .md files when .html versions exist
+converted_md_files = set()
+
 for f in local_files:
     # Safety check: Verify item is still a file (not deleted/moved)
     if os.path.isfile(f):
-        # Upload with folder structure preservation
-        upload_file_with_structure(root_drive, f, base_path)
+        # Check if this is a markdown file and conversion is enabled
+        if f.lower().endswith('.md') and convert_md_to_html:
+            print(f"[MD] Converting markdown file: {f}")
+
+            try:
+                # Read the markdown file
+                with open(f, 'r', encoding='utf-8') as md_file:
+                    md_content = md_file.read()
+
+                # Convert to HTML
+                html_content = convert_markdown_to_html(md_content, os.path.basename(f))
+
+                # Create HTML file path (same location, different extension)
+                html_path = f.replace('.md', '.html')
+
+                # Write HTML file temporarily
+                with open(html_path, 'w', encoding='utf-8') as html_file:
+                    html_file.write(html_content)
+
+                # Upload the HTML file instead of the markdown
+                print(f"[HTML] Uploading converted HTML file: {html_path}")
+                upload_file_with_structure(root_drive, html_path, base_path)
+
+                # Clean up temporary HTML file
+                if os.path.exists(html_path):
+                    os.remove(html_path)
+
+                # Mark this markdown file as converted
+                converted_md_files.add(f)
+
+            except Exception as e:
+                print(f"[Error] Failed to convert markdown file {f}: {e}")
+                print(f"[!] Uploading original markdown file instead")
+                # Fall back to uploading the markdown file as-is
+                upload_file_with_structure(root_drive, f, base_path)
+
+        elif f.lower().endswith('.md') and not convert_md_to_html:
+            # Markdown conversion is disabled, upload as-is
+            print(f"[MD] Uploading markdown file as-is (conversion disabled): {f}")
+            upload_file_with_structure(root_drive, f, base_path)
+
+        elif f not in converted_md_files:
+            # Regular file, not markdown or not converted
+            upload_file_with_structure(root_drive, f, base_path)
     else:
         # File might have been deleted/moved since discovery
         print(f"[Warning] Skipping {f} as it's not a file")
@@ -1059,22 +1461,22 @@ def format_bytes(bytes):
     return f"{bytes:.1f} TB"
 
 # Show detailed statistics
-print(f"📊 Sync Statistics:")
-print(f"   • New files uploaded:       {upload_stats['new_files']:>6}")
-print(f"   • Files updated:            {upload_stats['replaced_files']:>6}")
-print(f"   • Files skipped (unchanged):{upload_stats['skipped_files']:>6}")
-print(f"   • Failed uploads:           {upload_stats['failed_files']:>6}")
-print(f"   • Total files processed:    {len(local_files):>6}")
-print(f"\n💾 Data Transfer:")
-print(f"   • Data uploaded:   {format_bytes(upload_stats['bytes_uploaded'])}")
-print(f"   • Data skipped:    {format_bytes(upload_stats['bytes_skipped'])}")
-print(f"   • Total savings:   {format_bytes(upload_stats['bytes_skipped'])} ({upload_stats['skipped_files']} files not re-uploaded)")
+print(f"[STATS] Sync Statistics:")
+print(f"   - New files uploaded:       {upload_stats['new_files']:>6}")
+print(f"   - Files updated:            {upload_stats['replaced_files']:>6}")
+print(f"   - Files skipped (unchanged):{upload_stats['skipped_files']:>6}")
+print(f"   - Failed uploads:           {upload_stats['failed_files']:>6}")
+print(f"   - Total files processed:    {len(local_files):>6}")
+print(f"\n[DATA] Transfer Summary:")
+print(f"   - Data uploaded:   {format_bytes(upload_stats['bytes_uploaded'])}")
+print(f"   - Data skipped:    {format_bytes(upload_stats['bytes_skipped'])}")
+print(f"   - Total savings:   {format_bytes(upload_stats['bytes_skipped'])} ({upload_stats['skipped_files']} files not re-uploaded)")
 
 # Calculate efficiency percentage
 total_processed = upload_stats['new_files'] + upload_stats['replaced_files'] + upload_stats['skipped_files']
 if total_processed > 0:
     efficiency = (upload_stats['skipped_files'] / total_processed) * 100
-    print(f"\n⚡ Efficiency: {efficiency:.1f}% of files were already up-to-date")
+    print(f"\n[EFFICIENCY] {efficiency:.1f}% of files were already up-to-date")
 
 print("="*60)
 
