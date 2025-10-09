@@ -341,57 +341,75 @@ def ensure_folder_exists(parent_drive, folder_path):
         # ============================================================
         if not folder_found:
             try:
-                print(f"[+] Creating folder: {current_path}")
+                print(f"[+] Creating folder: {folder_name}")
 
-                # Method 1: Create folder using DriveItem object (recommended for v2.6.2)
-                new_folder = DriveItem(current_drive.context)
-                new_folder.name = folder_name
-                new_folder.folder = {}  # This designates it as a folder
+                # For Office365-REST-Python-Client v2.6.2, use create_folder method
+                # This is a built-in method specifically for folder creation
+                created_folder = current_drive.create_folder(folder_name).execute_query()
 
-                # Add conflict behavior to handle existing folders gracefully
-                new_folder.set_property("@microsoft.graph.conflictBehavior", "rename", False)
-
-                # Create the folder
-                created_folder = current_drive.children.add(new_folder).execute_query()
                 current_drive = created_folder
                 created_folders[current_path] = created_folder
                 print(f"[✓] Created folder: {current_path}")
 
-            except Exception as create_error:
-                print(f"[Error] Failed to create folder {current_path}: {create_error}")
-
-                # Method 2: Try using dictionary approach (fallback)
+            except AttributeError:
+                # If create_folder method doesn't exist, try alternative approach
                 try:
-                    print(f"[!] Trying alternative dictionary method to create folder: {current_path}")
+                    print(f"[!] create_folder not available, trying add() method")
 
-                    folder_data = {
-                        "name": folder_name,
-                        "folder": {},
-                        "@microsoft.graph.conflictBehavior": "rename"
-                    }
+                    # Create a DriveItem instance for the folder
+                    new_folder = DriveItem(current_drive.context)
+                    new_folder.set_property("name", folder_name)
+                    new_folder.set_property("folder", {})
 
-                    created_folder = current_drive.children.add(folder_data).execute_query()
+                    # Use add() without parameters (the object already has properties set)
+                    created_folder = current_drive.children.add()
+                    created_folder.set_property("name", folder_name)
+                    created_folder.set_property("folder", {})
+                    created_folder.execute_query()
+
                     current_drive = created_folder
                     created_folders[current_path] = created_folder
-                    print(f"[✓] Created folder (dictionary method): {current_path}")
+                    print(f"[✓] Created folder: {current_path}")
 
-                except Exception as dict_error:
-                    print(f"[Error] Dictionary method also failed: {dict_error}")
+                except Exception as add_error:
+                    print(f"[!] add() method failed: {add_error}")
+                    raise
 
-                    # Method 3: Last resort - try to get by path after creation attempt
+            except Exception as create_error:
+                error_msg = str(create_error)
+
+                # Check if folder already exists (common race condition)
+                if "nameAlreadyExists" in error_msg or "already exists" in error_msg.lower():
+                    print(f"[!] Folder already exists (race condition): {folder_name}")
                     try:
-                        print(f"[!] Checking if folder was created despite error...")
+                        # Try to get the existing folder
+                        children = current_drive.children.get().execute_query()
+                        for child in children:
+                            if child.name == folder_name and hasattr(child, 'folder'):
+                                current_drive = child
+                                created_folders[current_path] = child
+                                print(f"[✓] Found existing folder: {current_path}")
+                                break
+                    except:
+                        pass
+                else:
+                    print(f"[!] Error creating folder {folder_name}: {create_error}")
+
+                    # Fallback: Try to navigate to folder in case it exists
+                    try:
+                        print(f"[!] Attempting to navigate to folder: {folder_name}")
                         test_folder = current_drive.get_by_path(folder_name).get().execute_query()
                         if test_folder and hasattr(test_folder, 'folder'):
                             current_drive = test_folder
                             created_folders[current_path] = test_folder
-                            print(f"[✓] Folder found after creation attempt: {current_path}")
+                            print(f"[✓] Successfully navigated to folder: {current_path}")
                         else:
-                            raise Exception("Folder not found after creation attempts")
-                    except:
-                        print(f"[!] Unable to create folder {current_path}, will use parent folder")
-                        # Return parent folder as fallback
-                        return current_drive
+                            raise Exception("Not a folder")
+                    except Exception as nav_error:
+                        print(f"[!] Unable to create or navigate to folder {current_path}")
+                        print(f"[!] Will continue with parent folder")
+                        # Don't fail the entire upload, just use parent folder
+                        pass
 
     return current_drive
 
