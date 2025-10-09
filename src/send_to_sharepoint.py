@@ -1049,11 +1049,14 @@ def check_file_needs_update(drive, local_path, file_name):
     try:
         # Get all children in the folder to find our file
         # This is more reliable than get_by_path for some SharePoint configurations
-        children = drive.children.get().execute_query()
+        # Only request name, file, and folder properties initially to identify type
+        children = drive.children.get().select(["name", "file", "folder"]).execute_query()
 
         existing_file = None
         for child in children:
-            if child.name == sanitized_name:
+            # Use getattr for safe attribute access
+            child_name = getattr(child, 'name', None)
+            if child_name and child_name == sanitized_name:
                 existing_file = child
                 break
 
@@ -1062,17 +1065,35 @@ def check_file_needs_update(drive, local_path, file_name):
             print(f"[+] New file to upload: {sanitized_name}")
             return True, False, None
 
-        # Get detailed metadata for the file
-        existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file", "folder"]).execute_query()
-
-        # Verify it's a file, not a folder
+        # First check if this is a file or folder
         # In SharePoint, files have a 'file' property and folders have a 'folder' property
+        if hasattr(existing_file, 'folder') and existing_file.folder is not None:
+            # It's a folder with the same name as our file - conflict
+            print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
+            return True, False, None
+
+        # Now we know it's a file (or at least not a folder)
+        # Check if we need to fetch size and date properties for comparison
         if hasattr(existing_file, 'file') and existing_file.file is not None:
+            # Only fetch size/date properties for files, not folders
+            if not hasattr(existing_file, 'size') or not hasattr(existing_file, 'lastModifiedDateTime'):
+                try:
+                    print(f"[?] Fetching file comparison metadata for: {sanitized_name}")
+                    existing_file = existing_file.get().select(["size", "lastModifiedDateTime", "name", "file"]).execute_query()
+                except Exception as select_error:
+                    print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
+                    return True, False, None
             # File exists - compare metadata
-            remote_size = existing_file.size
+            # Safely access size attribute with fallback
+            if hasattr(existing_file, 'size'):
+                remote_size = existing_file.size
+            else:
+                # If size attribute is missing, we can't compare - assume file needs update
+                print(f"[!] Cannot determine remote file size, will re-upload: {sanitized_name}")
+                return True, True, existing_file
 
             # Parse SharePoint's ISO format timestamp
-            remote_modified_str = existing_file.lastModifiedDateTime
+            remote_modified_str = getattr(existing_file, 'lastModifiedDateTime', None)
             if remote_modified_str:
                 # Convert ISO format to timestamp for comparison
                 # SharePoint returns: "2024-01-15T10:30:00Z"
@@ -1101,12 +1122,8 @@ def check_file_needs_update(drive, local_path, file_name):
                     print(f"[*] File is newer locally: {sanitized_name}")
 
             return needs_update, True, existing_file
-        elif hasattr(existing_file, 'folder') and existing_file.folder is not None:
-            # It's a folder with the same name, not a file
-            print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
-            return True, False, None
         else:
-            # Item exists but we can't determine its type
+            # Item exists but it's not a file or folder we can identify
             print(f"[?] Unable to determine type of existing item: {sanitized_name}")
             return True, False, None
 
