@@ -39,6 +39,10 @@ inputs:
     description: 'Find files recursively in subdirectories specified in file_path'
     required: false
     default: "false"
+  force_upload:
+    description: 'Force upload all files regardless of changes (skips smart sync comparison)'
+    required: false
+    default: "false"
 outputs:
   return:
     description: 'Function output'
@@ -47,7 +51,7 @@ outputs:
 runs:
   using: 'docker'
   image: 'Dockerfile'
-  args: 
+  args:
     - ${{ inputs.site_name }}
     - ${{ inputs.host_name }}
     - ${{ inputs.tenant_id }}
@@ -59,3 +63,4 @@ runs:
     - ${{ inputs.login_endpoint }}
     - ${{ inputs.graph_endpoint }}
     - ${{ inputs.file_path_recursive_match }}
+    - ${{ inputs.force_upload }}

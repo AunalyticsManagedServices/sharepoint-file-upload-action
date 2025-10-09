@@ -12,15 +12,18 @@ PURPOSE:
 SYNOPSIS:
     python send_to_sharepoint.py <site_name> <sharepoint_host> <tenant_id>
                                  <client_id> <client_secret> <upload_path>
-                                 <file_path> [options]
+                                 <file_path> [max_retry] [login_endpoint]
+                                 [graph_endpoint] [recursive] [force_upload]
 
 DESCRIPTION:
-    - Uploads files and directories to SharePoint while preserving folder structure
-    - Automatically replaces existing files with newer versions
+    - Intelligently syncs files to SharePoint, skipping unchanged files
+    - Compares file size and modification time to detect changes
+    - Uploads only new or modified files, saving time and bandwidth
     - Handles large files (>4MB) using resumable upload sessions
     - Creates missing folders automatically in SharePoint
-    - Provides detailed logging and error reporting
+    - Provides detailed statistics on uploads, updates, and skipped files
     - Supports recursive file matching with glob patterns
+    - Optional force mode to upload all files regardless of changes
 
 REQUIREMENTS:
     - Python 3.6 or higher
@@ -46,6 +49,8 @@ import glob       # Unix-style pathname pattern expansion (e.g., *.txt matches a
 import time       # Time-related functions for delays and timestamps
 import tempfile   # Temporary file and directory creation
 import shutil     # High-level file operations (copy, move, etc.)
+import hashlib    # For computing file hashes (MD5, SHA256, etc.)
+from datetime import datetime, timezone  # For timestamp comparisons
 
 # Third-party library imports (need to be installed via pip)
 import msal       # Microsoft Authentication Library for Azure AD authentication
@@ -85,6 +90,10 @@ graph_endpoint = sys.argv[10] or "graph.microsoft.com"         # Microsoft Graph
 # Check if recursive flag is provided (for searching subdirectories)
 # len(sys.argv) > 11 ensures we don't get IndexError if argument doesn't exist
 file_path_recursive_match = sys.argv[11] if len(sys.argv) > 11 and sys.argv[11] else "False"
+
+# Check if force upload flag is provided (skip file comparison)
+# len(sys.argv) > 12 ensures we don't get IndexError if argument doesn't exist
+force_upload_flag = sys.argv[12] if len(sys.argv) > 12 and sys.argv[12] else "False"
 
 # ====================================================================
 # SHAREPOINT FILENAME SANITIZATION
@@ -212,9 +221,16 @@ def sanitize_path_components(path):
 # f-strings (f"...") allow embedding variables directly in strings
 tenant_url = f'https://{sharepoint_host_name}/sites/{site_name}'
 
-# Convert string argument to boolean for recursive file matching
+# Convert string arguments to boolean
 # .lower() converts to lowercase for case-insensitive comparison
 recursive = file_path_recursive_match.lower() in ['true', '1', 'yes']
+force_upload = force_upload_flag.lower() in ['true', '1', 'yes']
+
+# Show sync mode to user
+if force_upload:
+    print("[!] Force upload mode enabled - all files will be uploaded regardless of changes")
+else:
+    print("[✓] Smart sync mode enabled - unchanged files will be skipped")
 
 # ====================================================================
 # FILE DISCOVERY - Finding files to upload
@@ -362,7 +378,10 @@ created_folders = {}
 upload_stats = {
     'new_files': 0,       # Files that didn't exist in SharePoint
     'replaced_files': 0,  # Files that were overwritten
-    'failed_files': 0     # Files that failed to upload
+    'skipped_files': 0,   # Files skipped because they're identical
+    'failed_files': 0,    # Files that failed to upload
+    'bytes_uploaded': 0,  # Total bytes uploaded
+    'bytes_skipped': 0    # Total bytes skipped
 }
 
 def ensure_folder_exists(parent_drive, folder_path):
@@ -664,6 +683,88 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
             return_type.get().execute_query()
             success_callback(return_type, local_path)
 
+def check_file_needs_update(drive, local_path, file_name):
+    """
+    Check if a file in SharePoint needs to be updated by comparing size and modification time.
+
+    This function implements efficient file comparison to avoid unnecessary uploads.
+    Files are considered identical if:
+    1. Size matches exactly
+    2. Local file is not newer than SharePoint file
+
+    Args:
+        drive (DriveItem): The folder to check for existing file
+        local_path (str): Path to the local file
+        file_name (str): Name of the file to check
+
+    Returns:
+        tuple: (needs_update: bool, exists: bool, remote_file: DriveItem or None)
+            - needs_update: True if file should be uploaded
+            - exists: True if file exists in SharePoint
+            - remote_file: The existing SharePoint file object (if exists)
+
+    Example:
+        needs_update, exists, remote = check_file_needs_update(folder, "/path/to/file.pdf", "file.pdf")
+        if not needs_update:
+            print("File is up to date, skipping")
+    """
+    # Sanitize the file name to match what would be stored in SharePoint
+    sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
+
+    # Get local file information
+    local_size = os.path.getsize(local_path)
+    local_modified = os.path.getmtime(local_path)  # Unix timestamp
+
+    try:
+        # Attempt to retrieve file metadata from SharePoint
+        existing_file = drive.get_by_path(sanitized_name).select(["size", "lastModifiedDateTime", "name"]).get().execute_query()
+
+        # Verify it's a file, not a folder
+        if not hasattr(existing_file, 'folder'):
+            # File exists - compare metadata
+            remote_size = existing_file.size
+
+            # Parse SharePoint's ISO format timestamp
+            remote_modified_str = existing_file.lastModifiedDateTime
+            if remote_modified_str:
+                # Convert ISO format to timestamp for comparison
+                # SharePoint returns: "2024-01-15T10:30:00Z"
+                remote_modified_dt = datetime.fromisoformat(remote_modified_str.replace('Z', '+00:00'))
+                remote_modified = remote_modified_dt.timestamp()
+            else:
+                # If no modification time, assume file needs update
+                remote_modified = 0
+
+            # Compare size and modification time
+            # We use a 2-second tolerance for modification times due to filesystem differences
+            size_matches = (local_size == remote_size)
+            time_matches = abs(local_modified - remote_modified) < 2  # 2-second tolerance
+
+            # File needs update if size differs OR local is significantly newer
+            needs_update = not size_matches or (local_modified > remote_modified + 2)
+
+            if not needs_update:
+                print(f"[≡] File unchanged (size: {local_size:,} bytes): {sanitized_name}")
+                upload_stats['skipped_files'] += 1
+                upload_stats['bytes_skipped'] += local_size
+            else:
+                if not size_matches:
+                    print(f"[↻] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
+                else:
+                    print(f"[↻] File is newer locally: {sanitized_name}")
+
+            return needs_update, True, existing_file
+        else:
+            # It's a folder with the same name, not a file
+            print(f"[!] Found folder with same name as file: {sanitized_name}")
+            return True, False, None
+
+    except Exception as e:
+        # File doesn't exist in SharePoint (404 error is expected)
+        # Any other error will be caught and treated as "file doesn't exist"
+        print(f"[+] New file to upload: {sanitized_name}")
+        return True, False, None
+
 def check_and_delete_existing_file(drive, file_name):
     """
     Check if a file exists in SharePoint and delete it to enable replacement.
@@ -727,13 +828,14 @@ def check_and_delete_existing_file(drive, file_name):
         # Other errors (network, permissions) will be caught later
         return False
 
-def upload_file(drive, local_path, chunk_size):
+def upload_file(drive, local_path, chunk_size, force_upload=False):
     """
-    Upload a file to SharePoint/OneDrive, replacing any existing file.
+    Upload a file to SharePoint/OneDrive, intelligently skipping unchanged files.
 
     :param drive: The DriveItem representing the target folder
     :param local_path: Path to the local file to upload
     :param chunk_size: Size threshold for using resumable upload
+    :param force_upload: If True, skip comparison and always upload
     """
     file_name = os.path.basename(local_path)
     file_size = os.path.getsize(local_path)
@@ -741,18 +843,43 @@ def upload_file(drive, local_path, chunk_size):
     # Sanitize the file name for SharePoint compatibility
     sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
 
-    # Check for and delete any existing file with the same name
-    # Note: check_and_delete_existing_file already handles sanitization internally
-    file_was_deleted = check_and_delete_existing_file(drive, file_name)
+    # First, check if the file needs updating (unless forced)
+    if not force_upload:
+        needs_update, exists, remote_file = check_file_needs_update(drive, local_path, file_name)
 
-    if file_was_deleted:
-        print(f"[→] Uploading replacement file: {sanitized_name}")
-        if sanitized_name != file_name:
-            print(f"    (Original name: {file_name})")
+        # If file doesn't need updating, skip it
+        if not needs_update:
+            return  # File is identical, skip upload
+
+        # If file exists but needs update, delete it first
+        if exists and needs_update:
+            print(f"[×] Deleting outdated file to prepare for update...")
+            try:
+                remote_file.delete_object().execute_query()
+                print(f"[✓] Outdated file deleted successfully")
+                time.sleep(0.5)  # Brief pause for SharePoint to process
+                upload_stats['replaced_files'] += 1
+            except Exception as e:
+                print(f"[!] Warning: Could not delete existing file: {e}")
+
+            print(f"[→] Uploading updated file: {sanitized_name}")
+            if sanitized_name != file_name:
+                print(f"    (Original name: {file_name})")
+        else:
+            # New file
+            print(f"[→] Uploading new file: {sanitized_name}")
+            if sanitized_name != file_name:
+                print(f"    (Original name: {file_name})")
+            upload_stats['new_files'] += 1
     else:
-        print(f"[→] Uploading new file: {sanitized_name}")
-        if sanitized_name != file_name:
-            print(f"    (Original name: {file_name})")
+        # Force upload mode - use old behavior
+        file_was_deleted = check_and_delete_existing_file(drive, file_name)
+        if file_was_deleted:
+            print(f"[→] Force uploading replacement file: {sanitized_name}")
+            upload_stats['replaced_files'] += 1
+        else:
+            print(f"[→] Force uploading new file: {sanitized_name}")
+            upload_stats['new_files'] += 1
 
     try:
         # Special handling for files with periods in the name that might cause issues
@@ -798,11 +925,8 @@ def upload_file(drive, local_path, chunk_size):
         if temp_file_created and os.path.exists(temp_path):
             os.remove(temp_path)
 
-        # Update statistics after successful upload
-        if file_was_deleted:
-            upload_stats['replaced_files'] += 1
-        else:
-            upload_stats['new_files'] += 1
+        # Update upload byte counter after successful upload
+        upload_stats['bytes_uploaded'] += file_size
 
     except Exception as e:
         upload_stats['failed_files'] += 1
@@ -850,7 +974,7 @@ def upload_file_with_structure(root_drive, local_file_path, base_path=""):
     print(f"[→] Processing file: {local_file_path}")
     for i in range(max_retry):
         try:
-            upload_file(target_folder, local_file_path, 4*1024*1024)
+            upload_file(target_folder, local_file_path, 4*1024*1024, force_upload)
             break
         except Exception as e:
             print(f"[Error] Upload failed: {e}, {type(e)}")
@@ -922,15 +1046,36 @@ for f in local_files:
 
 # Create visual separator for better readability
 print("\n" + "="*60)
-print("[✓] UPLOAD PROCESS COMPLETED")
+print("[✓] SYNC PROCESS COMPLETED")
 print("="*60)
 
+# Calculate data sizes for display
+def format_bytes(bytes):
+    """Convert bytes to human-readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes < 1024.0:
+            return f"{bytes:.1f} {unit}"
+        bytes /= 1024.0
+    return f"{bytes:.1f} TB"
+
 # Show detailed statistics
-print(f"📊 Upload Statistics:")
-print(f"   • New files uploaded:      {upload_stats['new_files']}")
-print(f"   • Existing files replaced: {upload_stats['replaced_files']}")
-print(f"   • Failed uploads:          {upload_stats['failed_files']}")
-print(f"   • Total files processed:   {len(local_files)}")
+print(f"📊 Sync Statistics:")
+print(f"   • New files uploaded:       {upload_stats['new_files']:>6}")
+print(f"   • Files updated:            {upload_stats['replaced_files']:>6}")
+print(f"   • Files skipped (unchanged):{upload_stats['skipped_files']:>6}")
+print(f"   • Failed uploads:           {upload_stats['failed_files']:>6}")
+print(f"   • Total files processed:    {len(local_files):>6}")
+print(f"\n💾 Data Transfer:")
+print(f"   • Data uploaded:   {format_bytes(upload_stats['bytes_uploaded'])}")
+print(f"   • Data skipped:    {format_bytes(upload_stats['bytes_skipped'])}")
+print(f"   • Total savings:   {format_bytes(upload_stats['bytes_skipped'])} ({upload_stats['skipped_files']} files not re-uploaded)")
+
+# Calculate efficiency percentage
+total_processed = upload_stats['new_files'] + upload_stats['replaced_files'] + upload_stats['skipped_files']
+if total_processed > 0:
+    efficiency = (upload_stats['skipped_files'] / total_processed) * 100
+    print(f"\n⚡ Efficiency: {efficiency:.1f}% of files were already up-to-date")
+
 print("="*60)
 
 # ====================================================================
