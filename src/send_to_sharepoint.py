@@ -1535,11 +1535,13 @@ for f in local_files:
                     os.close(temp_html_fd)  # Ensure file descriptor is closed
                     raise write_error
 
-                # Upload the HTML file to the same location as the original markdown
-                # We need to preserve the original path structure, not use the temp path
+                # Check if HTML needs updating before upload
                 # Create a synthetic path that matches the original .md location but with .html extension
                 original_html_path = f.replace('.md', '.html')
-                print(f"[HTML] Uploading converted HTML file to: {original_html_path}")
+
+                # Get the size of the newly converted HTML file
+                html_file_size = os.path.getsize(html_path)
+                print(f"[HTML] Converted HTML size: {html_file_size:,} bytes")
 
                 # We'll use a modified version of upload_file_with_structure that accepts
                 # a separate actual file path and desired upload path
@@ -1562,24 +1564,57 @@ for f in local_files:
                 else:
                     target_folder = root_drive
 
-                # Upload the temp HTML file to the correct location with the correct name
-                # Extract just the filename from the original path for the desired name
+                # Check if HTML file exists in SharePoint and compare sizes
                 desired_html_filename = os.path.basename(original_html_path)
-                print(f"[→] Processing file: {original_html_path} (from temp: {html_path})")
-                for i in range(max_retry):
-                    try:
-                        upload_file(target_folder, html_path, 4*1024*1024, force_upload, desired_name=desired_html_filename)
-                        break
-                    except Exception as e:
-                        print(f"[Error] Upload failed: {e}, {type(e)}")
-                        if i == max_retry - 1:
-                            print(f"[Error] Failed to upload {original_html_path} after {max_retry} attempts")
-                            raise e
-                        else:
-                            print(f"[!] Retrying upload... ({i+1}/{max_retry})")
-                            time.sleep(2)
+                html_needs_update = True  # Default to uploading
 
-                # Clean up temporary HTML file
+                try:
+                    # Check if HTML already exists in SharePoint
+                    children = target_folder.children.get().select(["name", "size", "file"]).execute_query()
+                    html_found = False
+                    for child in children:
+                        child_name = getattr(child, 'name', None)
+                        if child_name and child_name == desired_html_filename:
+                            html_found = True
+                            # Found existing HTML file
+                            remote_size = getattr(child, 'size', None)
+                            if remote_size is not None:
+                                # Compare sizes
+                                if remote_size == html_file_size:
+                                    print(f"[=] HTML unchanged (size: {html_file_size:,} bytes): {desired_html_filename}")
+                                    html_needs_update = False
+                                    upload_stats['skipped_files'] += 1
+                                    upload_stats['bytes_skipped'] += html_file_size
+                                else:
+                                    print(f"[*] HTML size changed (local: {html_file_size:,} vs remote: {remote_size:,}): {desired_html_filename}")
+                                    upload_stats['replaced_files'] += 1
+                            break
+
+                    if not html_found:
+                        print(f"[+] New HTML file to upload: {desired_html_filename}")
+                        upload_stats['new_files'] += 1
+                except Exception as check_error:
+                    print(f"[!] Could not check existing HTML, will upload: {check_error}")
+
+                # Only upload if the HTML needs updating
+                if html_needs_update:
+                    print(f"[→] Processing file: {original_html_path} (from temp: {html_path})")
+                    for i in range(max_retry):
+                        try:
+                            upload_file(target_folder, html_path, 4*1024*1024, force_upload, desired_name=desired_html_filename)
+                            break
+                        except Exception as e:
+                            print(f"[Error] Upload failed: {e}, {type(e)}")
+                            if i == max_retry - 1:
+                                print(f"[Error] Failed to upload {original_html_path} after {max_retry} attempts")
+                                raise e
+                            else:
+                                print(f"[!] Retrying upload... ({i+1}/{max_retry})")
+                                time.sleep(2)
+                else:
+                    print(f"[✓] Skipping HTML upload - file is identical in SharePoint")
+
+                # Clean up temporary HTML file (whether uploaded or skipped)
                 if os.path.exists(html_path):
                     os.remove(html_path)
 
