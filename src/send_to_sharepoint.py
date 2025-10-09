@@ -1148,24 +1148,49 @@ def check_file_needs_update(drive, local_path, file_name):
                     print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
                 return True, False, None
             # File exists - compare metadata
-            # Safely access size attribute with fallback
-            if hasattr(existing_file, 'size'):
+            # Try multiple ways to get size (different APIs use different property names)
+            remote_size = None
+
+            # Try Graph API DriveItem properties
+            if hasattr(existing_file, 'size') and existing_file.size is not None:
                 remote_size = existing_file.size
-            else:
-                # If size attribute is missing, we can't compare - assume file needs update
+            # Try SharePoint File properties
+            elif hasattr(existing_file, 'length') and existing_file.length is not None:
+                remote_size = existing_file.length
+            # Try properties dictionary (dynamic properties)
+            elif hasattr(existing_file, 'properties'):
+                remote_size = existing_file.properties.get('size') or existing_file.properties.get('Size') or existing_file.properties.get('length') or existing_file.properties.get('Length')
+
+            if remote_size is None:
+                # If we still can't get size, assume file needs update
                 print(f"[!] Cannot determine remote file size, will re-upload: {sanitized_name}")
                 return True, True, existing_file
 
-            # Parse SharePoint's ISO format timestamp
-            remote_modified_str = getattr(existing_file, 'lastModifiedDateTime', None)
+            # Parse SharePoint's timestamp (try multiple property names)
+            remote_modified_str = None
+            remote_modified = 0
+
+            # Try Graph API property names
+            if hasattr(existing_file, 'lastModifiedDateTime'):
+                remote_modified_str = existing_file.lastModifiedDateTime
+            # Try SharePoint property names
+            elif hasattr(existing_file, 'time_last_modified'):
+                # This returns a datetime object directly
+                remote_modified = existing_file.time_last_modified.timestamp() if existing_file.time_last_modified else 0
+            # Try properties dictionary
+            elif hasattr(existing_file, 'properties'):
+                remote_modified_str = existing_file.properties.get('lastModifiedDateTime') or existing_file.properties.get('TimeLastModified')
+
             if remote_modified_str:
                 # Convert ISO format to timestamp for comparison
                 # SharePoint returns: "2024-01-15T10:30:00Z"
-                remote_modified_dt = datetime.fromisoformat(remote_modified_str.replace('Z', '+00:00'))
-                remote_modified = remote_modified_dt.timestamp()
-            else:
-                # If no modification time, assume file needs update
-                remote_modified = 0
+                try:
+                    remote_modified_dt = datetime.fromisoformat(remote_modified_str.replace('Z', '+00:00'))
+                    remote_modified = remote_modified_dt.timestamp()
+                except (ValueError, AttributeError):
+                    # If parsing fails, assume file needs update
+                    remote_modified = 0
+            # else: remote_modified already set above or defaults to 0
 
             # Compare size and modification time
             # We use a 2-second tolerance for modification times due to filesystem differences
@@ -1576,8 +1601,19 @@ for f in local_files:
                         child_name = getattr(child, 'name', None)
                         if child_name and child_name == desired_html_filename:
                             html_found = True
-                            # Found existing HTML file
-                            remote_size = getattr(child, 'size', None)
+                            # Found existing HTML file - try multiple ways to get size
+                            remote_size = None
+
+                            # Try Graph API DriveItem properties
+                            if hasattr(child, 'size') and child.size is not None:
+                                remote_size = child.size
+                            # Try SharePoint File properties
+                            elif hasattr(child, 'length') and child.length is not None:
+                                remote_size = child.length
+                            # Try properties dictionary
+                            elif hasattr(child, 'properties'):
+                                remote_size = child.properties.get('size') or child.properties.get('Size') or child.properties.get('length') or child.properties.get('Length')
+
                             if remote_size is not None:
                                 # Compare sizes
                                 if remote_size == html_file_size:
@@ -1588,6 +1624,9 @@ for f in local_files:
                                 else:
                                     print(f"[*] HTML size changed (local: {html_file_size:,} vs remote: {remote_size:,}): {desired_html_filename}")
                                     upload_stats['replaced_files'] += 1
+                            else:
+                                # Could not get size, assume needs update
+                                print(f"[!] Cannot determine remote HTML size, will upload: {desired_html_filename}")
                             break
 
                     if not html_found:
