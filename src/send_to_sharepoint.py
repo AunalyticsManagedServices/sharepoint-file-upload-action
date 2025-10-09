@@ -1,3 +1,12 @@
+"""
+SharePoint File Upload Script
+Compatible with Office365-REST-Python-Client v2.6.2+
+
+This script uploads files and directories to SharePoint/OneDrive while maintaining
+the directory structure. It handles folder creation, large file uploads with
+resumable sessions, and provides retry logic for reliability.
+"""
+
 import sys
 import os
 import msal
@@ -87,83 +96,109 @@ def ensure_folder_exists(parent_drive, folder_path):
     """
     Recursively ensure that a folder structure exists in SharePoint
     Returns the DriveItem for the final folder
+
+    Compatible with Office365-REST-Python-Client v2.6.2
     """
+    # Normalize path separators for cross-platform compatibility
+    folder_path = folder_path.replace('\\', '/')
+
     # If we've already created this folder, return it from cache
     if folder_path in created_folders:
         return created_folders[folder_path]
-    
+
     # Split the path into components
-    path_parts = folder_path.split(os.sep)
+    path_parts = [part for part in folder_path.split('/') if part]  # Filter out empty parts
+
+    if not path_parts:
+        return parent_drive
+
     current_drive = parent_drive
     current_path = ""
-    
+
     for folder_name in path_parts:
-        if not folder_name:  # Skip empty parts
-            continue
-            
         # Build the current path
-        if current_path:
-            current_path = f"{current_path}/{folder_name}"
-        else:
-            current_path = folder_name
-            
-        # Check if we've already created this path
+        current_path = f"{current_path}/{folder_name}" if current_path else folder_name
+
+        # Check if we've already processed this path
         if current_path in created_folders:
             current_drive = created_folders[current_path]
             continue
-        
-        # Try to get or create the folder
+
+        # Try to get the existing folder first
         folder_found = False
         try:
-            # Try to get the folder - check if it exists
             print(f"[?] Checking if folder exists: {current_path}")
-            folder = current_drive.get_by_path(folder_name).get().execute_query()
-            # If we get here, folder exists
-            current_drive = folder
-            created_folders[current_path] = folder
-            print(f"[✓] Folder already exists: {current_path}")
-            folder_found = True
+            # Use children collection with filter to check existence
+            children = current_drive.children.get().execute_query()
+
+            for child in children:
+                if child.name == folder_name and hasattr(child, 'folder'):
+                    # Folder exists
+                    current_drive = child
+                    created_folders[current_path] = child
+                    print(f"[✓] Folder already exists: {current_path}")
+                    folder_found = True
+                    break
+
         except Exception as e:
-            # Folder doesn't exist, need to create it
-            print(f"[!] Folder does not exist, will create: {current_path}")
+            print(f"[!] Error checking folder existence: {e}")
             folder_found = False
-        
+
+        # Create folder if it doesn't exist
         if not folder_found:
             try:
                 print(f"[+] Creating folder: {current_path}")
-                # Create folder using the correct API method
-                # For OneDrive/Graph API, we need to create a folder as a DriveItem
-                folder_request = {
-                    "name": folder_name,
-                    "folder": {},
-                    "@microsoft.graph.conflictBehavior": "replace"
-                }
-                
+
+                # Method 1: Create folder using DriveItem object (recommended for v2.6.2)
+                new_folder = DriveItem(current_drive.context)
+                new_folder.name = folder_name
+                new_folder.folder = {}  # This designates it as a folder
+
+                # Add conflict behavior to handle existing folders gracefully
+                new_folder.set_property("@microsoft.graph.conflictBehavior", "rename", False)
+
                 # Create the folder
-                folder = current_drive.children.add(folder_request).execute_query()
-                current_drive = folder
-                created_folders[current_path] = folder
+                created_folder = current_drive.children.add(new_folder).execute_query()
+                current_drive = created_folder
+                created_folders[current_path] = created_folder
                 print(f"[✓] Created folder: {current_path}")
-                
+
             except Exception as create_error:
                 print(f"[Error] Failed to create folder {current_path}: {create_error}")
-                # Try alternative method if the first fails
+
+                # Method 2: Try using dictionary approach (fallback)
                 try:
-                    print(f"[!] Trying alternative method to create folder: {current_path}")
-                    # Alternative: create empty DriveItem with folder facet
-                    new_folder = DriveItem(current_drive.context)
-                    new_folder.name = folder_name
-                    new_folder.folder = {}
-                    
-                    folder = current_drive.children.add(new_folder).execute_query()
-                    current_drive = folder
-                    created_folders[current_path] = folder
-                    print(f"[✓] Created folder (alternative method): {current_path}")
-                except Exception as alt_error:
-                    print(f"[Error] Alternative method also failed: {alt_error}")
-                    print(f"[!] Will attempt to upload files to parent folder instead")
-                    return current_drive
-    
+                    print(f"[!] Trying alternative dictionary method to create folder: {current_path}")
+
+                    folder_data = {
+                        "name": folder_name,
+                        "folder": {},
+                        "@microsoft.graph.conflictBehavior": "rename"
+                    }
+
+                    created_folder = current_drive.children.add(folder_data).execute_query()
+                    current_drive = created_folder
+                    created_folders[current_path] = created_folder
+                    print(f"[✓] Created folder (dictionary method): {current_path}")
+
+                except Exception as dict_error:
+                    print(f"[Error] Dictionary method also failed: {dict_error}")
+
+                    # Method 3: Last resort - try to get by path after creation attempt
+                    try:
+                        print(f"[!] Checking if folder was created despite error...")
+                        test_folder = current_drive.get_by_path(folder_name).get().execute_query()
+                        if test_folder and hasattr(test_folder, 'folder'):
+                            current_drive = test_folder
+                            created_folders[current_path] = test_folder
+                            print(f"[✓] Folder found after creation attempt: {current_path}")
+                        else:
+                            raise Exception("Folder not found after creation attempts")
+                    except:
+                        print(f"[!] Unable to create folder {current_path}, will use parent folder")
+                        # Return parent folder as fallback
+                        return current_drive
+
     return current_drive
 
 def progress_status(offset, file_size):
@@ -219,23 +254,28 @@ def upload_file(drive, local_path, chunk_size):
 def upload_file_with_structure(root_drive, local_file_path, base_path=""):
     """
     Upload a file maintaining its directory structure
-    
+
     :param root_drive: The root drive in SharePoint where files should be uploaded
     :param local_file_path: The local path of the file to upload
     :param base_path: The base path to strip from the file path (for relative paths)
+
+    Compatible with Office365-REST-Python-Client v2.6.2
     """
     # Get the relative path of the file
     if base_path:
         rel_path = os.path.relpath(local_file_path, base_path)
     else:
         rel_path = local_file_path
-    
+
+    # Normalize path separators for cross-platform compatibility
+    rel_path = rel_path.replace('\\', '/')
+
     # Get the directory path and file name
     dir_path = os.path.dirname(rel_path)
     file_name = os.path.basename(rel_path)
-    
+
     # If there's a directory structure, create it in SharePoint
-    if dir_path and dir_path != ".":
+    if dir_path and dir_path != "." and dir_path != "":
         target_folder = ensure_folder_exists(root_drive, dir_path)
     else:
         target_folder = root_drive
@@ -266,8 +306,17 @@ elif local_files:
 
 # First, execute the root_drive query to initialize it
 print("[*] Connecting to SharePoint...")
-root_drive.get().execute_query()
-print(f"[✓] Connected to SharePoint at: {upload_path}")
+try:
+    root_drive.get().execute_query()
+    print(f"[✓] Connected to SharePoint at: {upload_path}")
+except Exception as conn_error:
+    print(f"[Error] Failed to connect to SharePoint: {conn_error}")
+    print("[!] Ensure that:")
+    print("    - Your credentials are correct")
+    print("    - The site URL is correct")
+    print("    - The upload path exists on the SharePoint site")
+    print("    - You have appropriate permissions")
+    sys.exit(1)
 
 # Upload all files with their directory structure
 for f in local_files:
