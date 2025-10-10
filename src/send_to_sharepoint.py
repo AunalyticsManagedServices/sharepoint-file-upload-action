@@ -711,7 +711,9 @@ def check_and_create_filehash_column(site_url, list_name):
         list_name (str): Name of the document library (usually "Documents")
 
     Returns:
-        bool: True if column exists or was created successfully, False otherwise
+        tuple: (success: bool, actual_library_name: str)
+               - success: True if column exists or was created successfully
+               - actual_library_name: The library name that was actually used (may be fallback)
 
     Note:
         Requires Sites.ReadWrite.All or Sites.Manage.All permissions.
@@ -725,7 +727,7 @@ def check_and_create_filehash_column(site_url, list_name):
 
         if 'access_token' not in token:
             print(f"[!] Failed to acquire token for Graph API: {token.get('error_description', 'Unknown error')}")
-            return False
+            return False, list_name
 
         headers = {
             'Authorization': f"Bearer {token['access_token']}",
@@ -745,14 +747,14 @@ def check_and_create_filehash_column(site_url, list_name):
         if site_response.status_code != 200:
             print(f"[!] Failed to get site information: {site_response.status_code}")
             print(f"[DEBUG] Response: {site_response.text[:500]}")
-            return False
+            return False, list_name
 
         site_data = site_response.json()
         site_id = site_data.get('id')
 
         if not site_id:
             print("[!] Could not retrieve site ID")
-            return False
+            return False, list_name
 
         # Get the document library (list) ID
         lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
@@ -760,10 +762,11 @@ def check_and_create_filehash_column(site_url, list_name):
 
         if lists_response.status_code != 200:
             print(f"[!] Failed to get lists: {lists_response.status_code}")
-            return False
+            return False, list_name
 
         lists_data = lists_response.json()
         list_id = None
+        actual_library_name = list_name
 
         # Find the document library by name
         for lst in lists_data.get('value', []):
@@ -776,12 +779,13 @@ def check_and_create_filehash_column(site_url, list_name):
             for lst in lists_data.get('value', []):
                 if lst.get('displayName') == 'Shared Documents' or lst.get('name') == 'Shared Documents':
                     list_id = lst.get('id')
+                    actual_library_name = 'Shared Documents'
                     print(f"[!] Using 'Shared Documents' instead of '{list_name}'")
                     break
 
         if not list_id:
             print(f"[!] Document library '{list_name}' not found")
-            return False
+            return False, list_name
 
         # Check if FileHash column already exists
         columns_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/columns"
@@ -789,7 +793,7 @@ def check_and_create_filehash_column(site_url, list_name):
 
         if columns_response.status_code != 200:
             print(f"[!] Failed to get columns: {columns_response.status_code}")
-            return False
+            return False, actual_library_name
 
         columns_data = columns_response.json()
         filehash_exists = False
@@ -832,17 +836,17 @@ def check_and_create_filehash_column(site_url, list_name):
 
             if create_response.status_code == 201:
                 print("[✓] FileHash column created successfully")
-                return True
+                return True, actual_library_name
             else:
                 print(f"[!] Failed to create FileHash column: {create_response.status_code}")
                 print(f"[DEBUG] Response: {create_response.text[:500]}")
-                return False
+                return False, actual_library_name
 
-        return True
+        return True, actual_library_name
 
     except Exception as e:
         print(f"[!] Error checking/creating FileHash column: {e}")
-        return False
+        return False, list_name
 
 def rewrite_endpoint(request):
     """
@@ -2004,7 +2008,7 @@ try:
             library_name = path_parts[0]
 
     # Attempt to create the FileHash column for hash-based comparison
-    filehash_column_available = check_and_create_filehash_column(tenant_url, library_name)
+    filehash_column_available, library_name = check_and_create_filehash_column(tenant_url, library_name)
     if filehash_column_available:
         print("[✓] FileHash column is available for hash-based comparison")
     else:
