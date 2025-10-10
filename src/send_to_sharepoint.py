@@ -891,7 +891,8 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
 
         headers = {
             'Authorization': f"Bearer {token['access_token']}",
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly'
         }
 
         # Parse site URL to get site ID
@@ -965,12 +966,17 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
         items = items_data.get('value', [])
 
         # Filter items in Python to find matching filename
+        print(f"[DEBUG] Searching through {len(items)} items for '{filename}'")
         for item in items:
             if 'fields' in item and item['fields']:
                 file_leaf_ref = item['fields'].get('FileLeafRef')
                 if file_leaf_ref == filename:
+                    print(f"[DEBUG] Found matching item: {file_leaf_ref}")
                     return item
 
+        print(f"[DEBUG] No matching item found for '{filename}'")
+        if items and len(items) > 0:
+            print(f"[DEBUG] Sample FileLeafRef values: {[item.get('fields', {}).get('FileLeafRef', 'N/A') for item in items[:3]]}")
         return None
 
     except Exception as e:
