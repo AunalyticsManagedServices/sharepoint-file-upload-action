@@ -935,8 +935,10 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
             return None
 
         # Query list items by filename with expanded fields
-        # Filter by FileLeafRef which contains the filename
+        # Try filtering by FileLeafRef first, fallback to getting all items if filter fails
         items_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items"
+
+        # First attempt: Use OData filter
         items_params = {
             '$expand': 'fields',
             '$filter': f"fields/FileLeafRef eq '{filename}'"
@@ -945,16 +947,31 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
         items_response = requests.get(items_endpoint, headers=headers, params=items_params)
 
         if items_response.status_code != 200:
-            print(f"[!] Failed to get list items: {items_response.status_code}")
-            return None
+            print(f"[!] Failed to get list items with filter: {items_response.status_code}")
+            print(f"[DEBUG] Filter request URL: {items_response.url}")
+            print(f"[DEBUG] Response: {items_response.text[:200]}")
+
+            # Fallback: Get all items and filter in Python
+            print(f"[DEBUG] Trying fallback: getting all items and filtering in Python...")
+            items_params = {'$expand': 'fields'}
+            items_response = requests.get(items_endpoint, headers=headers, params=items_params)
+
+            if items_response.status_code != 200:
+                print(f"[!] Failed to get list items (fallback): {items_response.status_code}")
+                print(f"[DEBUG] Fallback response: {items_response.text[:200]}")
+                return None
 
         items_data = items_response.json()
         items = items_data.get('value', [])
 
-        if items:
-            return items[0]  # Return first matching item
-        else:
-            return None
+        # Filter items in Python to find matching filename
+        for item in items:
+            if 'fields' in item and item['fields']:
+                file_leaf_ref = item['fields'].get('FileLeafRef')
+                if file_leaf_ref == filename:
+                    return item
+
+        return None
 
     except Exception as e:
         print(f"[!] Error getting list item by filename: {str(e)[:200]}")
