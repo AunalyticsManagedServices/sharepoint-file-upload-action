@@ -865,6 +865,181 @@ def rewrite_endpoint(request):
         "https://graph.microsoft.com", f"https://{graph_endpoint}"
     )
 
+def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
+    """
+    Get SharePoint list item by filename using direct Graph API REST calls.
+
+    Args:
+        site_url (str): Full SharePoint site URL
+        list_name (str): Name of the document library (usually "Documents")
+        filename (str): Name of the file to find
+
+    Returns:
+        dict: List item data with custom columns, or None if not found
+    """
+    try:
+        # Get token for Graph API
+        token = acquire_token()
+
+        if 'access_token' not in token:
+            print(f"[!] Failed to acquire token for Graph API: {token.get('error_description', 'Unknown error')}")
+            return None
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+
+        # Parse site URL to get site ID
+        site_parts = site_url.replace('https://', '').split('/')
+        host_name = site_parts[0]
+        site_name = site_parts[2] if len(site_parts) > 2 else ''
+
+        # Get site ID first
+        site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
+        site_response = requests.get(site_endpoint, headers=headers)
+
+        if site_response.status_code != 200:
+            print(f"[!] Failed to get site information: {site_response.status_code}")
+            return None
+
+        site_data = site_response.json()
+        site_id = site_data.get('id')
+
+        if not site_id:
+            print("[!] Could not retrieve site ID")
+            return None
+
+        # Get the document library (list) ID
+        lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
+        lists_response = requests.get(lists_endpoint, headers=headers)
+
+        if lists_response.status_code != 200:
+            print(f"[!] Failed to get lists: {lists_response.status_code}")
+            return None
+
+        lists_data = lists_response.json()
+        list_id = None
+
+        for sp_list in lists_data.get('value', []):
+            if sp_list.get('displayName') == list_name or sp_list.get('name') == list_name:
+                list_id = sp_list.get('id')
+                break
+
+        if not list_id:
+            print(f"[!] Could not find list '{list_name}'")
+            return None
+
+        # Query list items by filename with expanded fields
+        # Filter by FileLeafRef which contains the filename
+        items_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items"
+        items_params = {
+            '$expand': 'fields',
+            '$filter': f"fields/FileLeafRef eq '{filename}'"
+        }
+
+        items_response = requests.get(items_endpoint, headers=headers, params=items_params)
+
+        if items_response.status_code != 200:
+            print(f"[!] Failed to get list items: {items_response.status_code}")
+            return None
+
+        items_data = items_response.json()
+        items = items_data.get('value', [])
+
+        if items:
+            return items[0]  # Return first matching item
+        else:
+            return None
+
+    except Exception as e:
+        print(f"[!] Error getting list item by filename: {str(e)[:200]}")
+        return None
+
+def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, field_value):
+    """
+    Update a custom field in a SharePoint list item using direct Graph API REST calls.
+
+    Args:
+        site_url (str): Full SharePoint site URL
+        list_name (str): Name of the document library (usually "Documents")
+        item_id (str): SharePoint list item ID
+        field_name (str): Internal name of the field to update
+        field_value (str): Value to set for the field
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Get token for Graph API
+        token = acquire_token()
+
+        if 'access_token' not in token:
+            print(f"[!] Failed to acquire token for Graph API: {token.get('error_description', 'Unknown error')}")
+            return False
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+
+        # Parse site URL to get site ID
+        site_parts = site_url.replace('https://', '').split('/')
+        host_name = site_parts[0]
+        site_name = site_parts[2] if len(site_parts) > 2 else ''
+
+        # Get site ID first
+        site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
+        site_response = requests.get(site_endpoint, headers=headers)
+
+        if site_response.status_code != 200:
+            print(f"[!] Failed to get site information: {site_response.status_code}")
+            return False
+
+        site_data = site_response.json()
+        site_id = site_data.get('id')
+
+        if not site_id:
+            print("[!] Could not retrieve site ID")
+            return False
+
+        # Get the document library (list) ID
+        lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
+        lists_response = requests.get(lists_endpoint, headers=headers)
+
+        if lists_response.status_code != 200:
+            print(f"[!] Failed to get lists: {lists_response.status_code}")
+            return False
+
+        lists_data = lists_response.json()
+        list_id = None
+
+        for sp_list in lists_data.get('value', []):
+            if sp_list.get('displayName') == list_name or sp_list.get('name') == list_name:
+                list_id = sp_list.get('id')
+                break
+
+        if not list_id:
+            print(f"[!] Could not find list '{list_name}'")
+            return False
+
+        # Update the field using PATCH request
+        fields_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
+        field_data = {field_name: field_value}
+
+        update_response = requests.patch(fields_endpoint, headers=headers, json=field_data)
+
+        if update_response.status_code == 200:
+            return True
+        else:
+            print(f"[!] Failed to update field: {update_response.status_code}")
+            print(f"[DEBUG] Response: {update_response.text[:500]}")
+            return False
+
+    except Exception as e:
+        print(f"[!] Error updating list item field: {str(e)[:200]}")
+        return False
+
 # ====================================================================
 # MICROSOFT GRAPH CLIENT SETUP
 # ====================================================================
@@ -1337,51 +1512,53 @@ def check_file_needs_update(drive, local_path, file_name):
             # Don't try to get file metadata for folders
             return True, False, None, local_hash
 
-        # First, try to get the FileHash property if it exists
+        # First, try to get the FileHash property if it exists using direct REST API
         hash_comparison_available = False
         remote_hash = None
 
+        # Debug logging for FileHash retrieval
+        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
         try:
-            # Use SharePoint REST API approach with listitem_allfields for custom columns
-            # Graph API DriveItems don't properly expose custom SharePoint columns
-            list_item = existing_file.listitem_allfields
+            # Use direct Graph API REST calls to get SharePoint list item with custom columns
+            list_item_data = get_sharepoint_list_item_by_filename(tenant_url, library_name, sanitized_name)
 
-            # Load the list item to access all SharePoint columns including custom ones
-            if list_item:
-                list_item.get().execute_query()
+            if list_item_data and 'fields' in list_item_data:
+                fields = list_item_data['fields']
 
-                # Debug logging for FileHash retrieval
-                debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
                 if debug_metadata:
                     print(f"[DEBUG] Retrieving FileHash for {sanitized_name}")
-                    print(f"[DEBUG] listitem_allfields object: {type(list_item)}")
-                    print(f"[DEBUG] list_item has properties: {hasattr(list_item, 'properties')}")
-                    if hasattr(list_item, 'properties') and list_item.properties:
-                        print(f"[DEBUG] Available list item properties: {list(list_item.properties.keys())}")
-                        print(f"[DEBUG] FileHash in properties: {'FileHash' in list_item.properties}")
-                        if 'FileHash' in list_item.properties:
-                            print(f"[DEBUG] FileHash value: {list_item.properties.get('FileHash')}")
+                    print(f"[DEBUG] REST API list item data: {type(list_item_data)}")
+                    print(f"[DEBUG] fields data: {type(fields)}")
+                    print(f"[DEBUG] Available field properties: {list(fields.keys())}")
+                    print(f"[DEBUG] FileHash in properties: {'FileHash' in fields}")
+                    if 'FileHash' in fields:
+                        print(f"[DEBUG] FileHash value: {fields.get('FileHash')}")
 
-                # Access the FileHash custom column from the list item properties
-                if hasattr(list_item, 'properties') and list_item.properties:
-                    remote_hash = list_item.properties.get('FileHash')
+                # Access the FileHash custom column from the fields
+                remote_hash = fields.get('FileHash')
 
-                    if remote_hash:
-                        hash_comparison_available = True
-                        print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
+                if remote_hash:
+                    hash_comparison_available = True
+                    print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
 
-                        # Compare hashes - this is the most reliable comparison
-                        if local_hash and local_hash == remote_hash:
-                            print(f"[=] File unchanged (hash match): {sanitized_name}")
-                            upload_stats['skipped_files'] += 1
-                            upload_stats['bytes_skipped'] += local_size
-                            return False, True, existing_file, local_hash
-                        elif local_hash:
-                            print(f"[*] File changed (hash mismatch): {sanitized_name}")
-                            return True, True, existing_file, local_hash
+                    # Compare hashes - this is the most reliable comparison
+                    if local_hash and local_hash == remote_hash:
+                        print(f"[=] File unchanged (hash match): {sanitized_name}")
+                        upload_stats['skipped_files'] += 1
+                        upload_stats['bytes_skipped'] += local_size
+                        return False, True, existing_file, local_hash
+                    elif local_hash:
+                        print(f"[*] File changed (hash mismatch): {sanitized_name}")
+                        return True, True, existing_file, local_hash
+                elif debug_metadata:
+                    print(f"[DEBUG] FileHash not found in list item fields")
+            elif debug_metadata:
+                print(f"[DEBUG] Could not retrieve list item data for {sanitized_name}")
+
         except Exception as hash_error:
             # FileHash column might not exist or we can't access it
-            print(f"[!] Could not retrieve FileHash, falling back to size comparison: {str(hash_error)[:100]}")
+            print(f"[!] Could not retrieve FileHash via REST API, falling back to size comparison: {str(hash_error)[:100]}")
             hash_comparison_available = False
 
         # If hash comparison wasn't available, fall back to size comparison
@@ -1665,65 +1842,54 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
         # Update upload byte counter after successful upload
         upload_stats['bytes_uploaded'] += file_size
 
-        # Try to set the FileHash metadata if we have a hash
+        # Try to set the FileHash metadata if we have a hash using direct REST API
         if local_hash:
             try:
                 print(f"[#] Setting FileHash metadata...")
-                # Need to get the uploaded file's list item to set metadata
-                # We need to re-fetch the file to get its list item
-                children = drive.children.get().select(["name", "id"]).execute_query()
-                uploaded_file = None
-                for child in children:
-                    if child.name == sanitized_name:
-                        uploaded_file = child
-                        break
 
-                if uploaded_file:
-                    # Use SharePoint REST API approach with listitem_allfields for custom columns
-                    # Graph API DriveItems don't properly expose custom SharePoint columns
-                    list_item = uploaded_file.listitem_allfields
+                # Debug logging for FileHash setting
+                debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
 
-                    # Load the list item to access all SharePoint columns including custom ones
-                    if list_item:
-                        list_item.get().execute_query()
+                # First get the list item data to find the item ID
+                list_item_data = get_sharepoint_list_item_by_filename(tenant_url, library_name, sanitized_name)
 
-                        # Debug logging for FileHash setting
-                        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
-                        if debug_metadata:
-                            print(f"[DEBUG] Setting FileHash for {sanitized_name}")
-                            print(f"[DEBUG] listitem_allfields object: {type(list_item)}")
-                            print(f"[DEBUG] list_item has properties: {hasattr(list_item, 'properties')}")
-                            if hasattr(list_item, 'properties') and list_item.properties:
-                                print(f"[DEBUG] Available list item properties before setting: {list(list_item.properties.keys())}")
-                                print(f"[DEBUG] Current FileHash value: {list_item.properties.get('FileHash', 'NOT_FOUND')}")
-                            print(f"[DEBUG] About to set FileHash to: {local_hash}")
+                if list_item_data and 'id' in list_item_data:
+                    item_id = list_item_data['id']
 
-                        # Set the FileHash property using SharePoint REST API approach
-                        list_item.set_property('FileHash', local_hash)
-                        list_item.update()
-                        uploaded_file.context.execute_query()
+                    if debug_metadata:
+                        print(f"[DEBUG] Setting FileHash for {sanitized_name}")
+                        print(f"[DEBUG] SharePoint list item ID: {item_id}")
+                        print(f"[DEBUG] About to set FileHash to: {local_hash}")
+
+                    # Update the FileHash field using REST API
+                    success = update_sharepoint_list_item_field(
+                        tenant_url,
+                        library_name,
+                        item_id,
+                        'FileHash',
+                        local_hash
+                    )
+
+                    if success:
+                        print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
 
                         # Debug logging to verify FileHash was set
                         if debug_metadata:
-                            try:
-                                # Re-fetch to verify the FileHash was set correctly
-                                list_item.get().execute_query()
-                                if hasattr(list_item, 'properties') and list_item.properties:
-                                    verified_hash = list_item.properties.get('FileHash')
-                                    print(f"[DEBUG] FileHash verification after setting: {verified_hash}")
-                                    print(f"[DEBUG] FileHash matches expected: {verified_hash == local_hash}")
-                                else:
-                                    print(f"[DEBUG] Unable to verify FileHash - no properties after setting")
-                            except Exception as verify_error:
-                                print(f"[DEBUG] Error verifying FileHash after setting: {str(verify_error)[:100]}")
-
-                        print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
+                            # Re-fetch to verify the FileHash was set correctly
+                            verify_data = get_sharepoint_list_item_by_filename(tenant_url, library_name, sanitized_name)
+                            if verify_data and 'fields' in verify_data:
+                                verified_hash = verify_data['fields'].get('FileHash')
+                                print(f"[DEBUG] FileHash verification after setting: {verified_hash}")
+                                print(f"[DEBUG] FileHash matches expected: {verified_hash == local_hash}")
+                            else:
+                                print(f"[DEBUG] Unable to verify FileHash - could not retrieve updated item")
                     else:
-                        print(f"[!] Could not access listItem to set hash")
+                        print(f"[!] Failed to set FileHash metadata via REST API")
                 else:
-                    print(f"[!] Could not find uploaded file to set hash metadata")
+                    print(f"[!] Could not find list item for uploaded file to set hash metadata")
+
             except Exception as hash_error:
-                print(f"[!] Could not set FileHash metadata: {str(hash_error)[:200]}")
+                print(f"[!] Could not set FileHash metadata via REST API: {str(hash_error)[:200]}")
                 # Continue anyway - file is uploaded successfully
 
     except Exception as e:
@@ -1935,33 +2101,29 @@ for f in local_files:
                         if child_name and child_name == desired_html_filename:
                             html_found = True
 
-                            # First try hash comparison if available
+                            # First try hash comparison if available using direct REST API
                             if html_hash and filehash_column_available:
                                 try:
-                                    # Use SharePoint REST API approach with listitem_allfields for custom columns
-                                    # Graph API DriveItems don't properly expose custom SharePoint columns
-                                    list_item = child.listitem_allfields
+                                    # Debug logging for HTML FileHash retrieval
+                                    debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
 
-                                    # Load the list item to access all SharePoint columns including custom ones
-                                    if list_item:
-                                        list_item.get().execute_query()
+                                    # Use direct Graph API REST calls to get SharePoint list item with custom columns
+                                    list_item_data = get_sharepoint_list_item_by_filename(tenant_url, library_name, desired_html_filename)
 
-                                        # Debug logging for HTML FileHash retrieval
-                                        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+                                    if list_item_data and 'fields' in list_item_data:
+                                        fields = list_item_data['fields']
+
                                         if debug_metadata:
                                             print(f"[DEBUG] Retrieving FileHash for HTML {desired_html_filename}")
-                                            print(f"[DEBUG] HTML listitem_allfields object: {type(list_item)}")
-                                            print(f"[DEBUG] HTML list_item has properties: {hasattr(list_item, 'properties')}")
-                                            if hasattr(list_item, 'properties') and list_item.properties:
-                                                print(f"[DEBUG] HTML available list item properties: {list(list_item.properties.keys())}")
-                                                print(f"[DEBUG] HTML FileHash in properties: {'FileHash' in list_item.properties}")
-                                                if 'FileHash' in list_item.properties:
-                                                    print(f"[DEBUG] HTML FileHash value: {list_item.properties.get('FileHash')}")
+                                            print(f"[DEBUG] HTML REST API list item data: {type(list_item_data)}")
+                                            print(f"[DEBUG] HTML fields data: {type(fields)}")
+                                            print(f"[DEBUG] HTML available field properties: {list(fields.keys())}")
+                                            print(f"[DEBUG] HTML FileHash in properties: {'FileHash' in fields}")
+                                            if 'FileHash' in fields:
+                                                print(f"[DEBUG] HTML FileHash value: {fields.get('FileHash')}")
 
-                                        # Try to get FileHash from the list item properties
-                                        remote_hash = None
-                                        if hasattr(list_item, 'properties') and list_item.properties:
-                                            remote_hash = list_item.properties.get('FileHash')
+                                        # Try to get FileHash from the fields
+                                        remote_hash = fields.get('FileHash')
 
                                         if remote_hash:
                                             hash_comparison_used = True
@@ -1974,8 +2136,15 @@ for f in local_files:
                                                 print(f"[*] HTML changed (hash mismatch): {desired_html_filename}")
                                                 upload_stats['replaced_files'] += 1
                                             break
-                                except:
+                                        elif debug_metadata:
+                                            print(f"[DEBUG] HTML FileHash not found in list item fields")
+                                    elif debug_metadata:
+                                        print(f"[DEBUG] Could not retrieve HTML list item data for {desired_html_filename}")
+
+                                except Exception as html_hash_error:
                                     # Hash comparison failed, fall back to size
+                                    if debug_metadata:
+                                        print(f"[DEBUG] HTML hash comparison failed: {str(html_hash_error)[:100]}")
                                     pass
 
                             # Fall back to size comparison if hash wasn't available
