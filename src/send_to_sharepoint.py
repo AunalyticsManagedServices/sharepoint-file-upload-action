@@ -1342,36 +1342,41 @@ def check_file_needs_update(drive, local_path, file_name):
         remote_hash = None
 
         try:
-            # Graph API DriveItems require expanding listItemAllFields to access SharePoint metadata
-            # We need to refetch the file with the expanded property
-            existing_file.expand(["listItemAllFields"]).get().execute_query()
+            # Graph API DriveItems have a 'listItem' relationship that contains SharePoint metadata
+            # Custom columns are accessed via listItem.fields (a fieldValueSet)
+            existing_file.expand(["listItem"]).get().execute_query()
 
-            # Now try to access the list item properties
-            if hasattr(existing_file, 'listItemAllFields') and existing_file.listItemAllFields:
-                list_item_fields = existing_file.listItemAllFields
+            # Access the SharePoint list item and its fields
+            if hasattr(existing_file, 'listItem') and existing_file.listItem:
+                list_item = existing_file.listItem
 
-                # Access the FileHash property from the fields
-                if hasattr(list_item_fields, 'properties') and list_item_fields.properties:
-                    remote_hash = list_item_fields.properties.get('FileHash')
-                elif hasattr(list_item_fields, 'FileHash'):
-                    # Sometimes the property is directly accessible
-                    remote_hash = getattr(list_item_fields, 'FileHash', None)
-                else:
-                    remote_hash = None
+                # The 'fields' property contains all SharePoint columns (including custom FileHash)
+                # Try to expand fields if not already loaded
+                if not hasattr(list_item, 'fields') or list_item.fields is None:
+                    list_item.expand(["fields"]).get().execute_query()
 
-                if remote_hash:
-                    hash_comparison_available = True
-                    print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
+                # Access the FileHash custom column from the fields
+                if hasattr(list_item, 'fields') and list_item.fields:
+                    # Fields are stored as a dictionary-like properties object
+                    if hasattr(list_item.fields, 'properties') and list_item.fields.properties:
+                        remote_hash = list_item.fields.properties.get('FileHash')
+                    else:
+                        # Try direct attribute access as fallback
+                        remote_hash = getattr(list_item.fields, 'FileHash', None)
 
-                    # Compare hashes - this is the most reliable comparison
-                    if local_hash and local_hash == remote_hash:
-                        print(f"[=] File unchanged (hash match): {sanitized_name}")
-                        upload_stats['skipped_files'] += 1
-                        upload_stats['bytes_skipped'] += local_size
-                        return False, True, existing_file, local_hash
-                    elif local_hash:
-                        print(f"[*] File changed (hash mismatch): {sanitized_name}")
-                        return True, True, existing_file, local_hash
+                    if remote_hash:
+                        hash_comparison_available = True
+                        print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
+
+                        # Compare hashes - this is the most reliable comparison
+                        if local_hash and local_hash == remote_hash:
+                            print(f"[=] File unchanged (hash match): {sanitized_name}")
+                            upload_stats['skipped_files'] += 1
+                            upload_stats['bytes_skipped'] += local_size
+                            return False, True, existing_file, local_hash
+                        elif local_hash:
+                            print(f"[*] File changed (hash mismatch): {sanitized_name}")
+                            return True, True, existing_file, local_hash
         except Exception as hash_error:
             # FileHash column might not exist or we can't access it
             print(f"[!] Could not retrieve FileHash, falling back to size comparison: {str(hash_error)[:100]}")
@@ -1672,20 +1677,26 @@ def upload_file(drive, local_path, chunk_size, force_upload=False, desired_name=
                         break
 
                 if uploaded_file:
-                    # Graph API DriveItems require expanding listItemAllFields to access SharePoint metadata
-                    uploaded_file.expand(["listItemAllFields"]).get().execute_query()
+                    # Graph API DriveItems require expanding listItem to access SharePoint metadata
+                    uploaded_file.expand(["listItem"]).get().execute_query()
 
-                    # Now access the list item fields to set the FileHash property
-                    if hasattr(uploaded_file, 'listItemAllFields') and uploaded_file.listItemAllFields:
-                        list_item_fields = uploaded_file.listItemAllFields
+                    # Now access the list item to set the FileHash in its fields
+                    if hasattr(uploaded_file, 'listItem') and uploaded_file.listItem:
+                        list_item = uploaded_file.listItem
 
-                        # Set the FileHash property and update
-                        list_item_fields.set_property("FileHash", local_hash)
-                        list_item_fields.update()
+                        # Expand fields if not already loaded
+                        if not hasattr(list_item, 'fields') or list_item.fields is None:
+                            list_item.expand(["fields"]).get().execute_query()
+
+                        # Set the FileHash property in the fields and update
+                        # Note: For setting properties, we may need to access fields differently
+                        # Try setting directly on the listItem which should update the fields
+                        list_item.set_property("fields", {"FileHash": local_hash})
+                        list_item.update()
                         uploaded_file.context.execute_query()
                         print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
                     else:
-                        print(f"[!] Could not access listItemAllFields to set hash")
+                        print(f"[!] Could not access listItem to set hash")
                 else:
                     print(f"[!] Could not find uploaded file to set hash metadata")
             except Exception as hash_error:
@@ -1904,19 +1915,24 @@ for f in local_files:
                             # First try hash comparison if available
                             if html_hash and filehash_column_available:
                                 try:
-                                    # Expand listItemAllFields to access SharePoint metadata
-                                    child.expand(["listItemAllFields"]).get().execute_query()
+                                    # Expand listItem to access SharePoint metadata
+                                    child.expand(["listItem"]).get().execute_query()
 
-                                    # Access the list item fields to get FileHash
-                                    if hasattr(child, 'listItemAllFields') and child.listItemAllFields:
-                                        list_item_fields = child.listItemAllFields
+                                    # Access the list item and its fields to get FileHash
+                                    if hasattr(child, 'listItem') and child.listItem:
+                                        list_item = child.listItem
 
-                                        # Try to get FileHash from properties or directly
+                                        # Expand fields if not already loaded
+                                        if not hasattr(list_item, 'fields') or list_item.fields is None:
+                                            list_item.expand(["fields"]).get().execute_query()
+
+                                        # Try to get FileHash from the fields
                                         remote_hash = None
-                                        if hasattr(list_item_fields, 'properties') and list_item_fields.properties:
-                                            remote_hash = list_item_fields.properties.get('FileHash')
-                                        elif hasattr(list_item_fields, 'FileHash'):
-                                            remote_hash = getattr(list_item_fields, 'FileHash', None)
+                                        if hasattr(list_item, 'fields') and list_item.fields:
+                                            if hasattr(list_item.fields, 'properties') and list_item.fields.properties:
+                                                remote_hash = list_item.fields.properties.get('FileHash')
+                                            else:
+                                                remote_hash = getattr(list_item.fields, 'FileHash', None)
 
                                         if remote_hash:
                                             hash_comparison_used = True
