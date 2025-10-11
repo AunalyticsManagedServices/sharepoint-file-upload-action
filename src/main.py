@@ -452,6 +452,32 @@ def print_summary(total_files, whatif_mode=False):
 
     print(f"   - Failed uploads:           {stats['failed_files']:>6}")
     print(f"   - Total files processed:    {total_files:>6}")
+
+    # Show comparison methods if files were compared
+    total_compared = stats.get('compared_by_hash', 0) + stats.get('compared_by_size', 0)
+    if total_compared > 0:
+        print(f"\n[COMPARE] File Comparison Methods:")
+        hash_count = stats.get('compared_by_hash', 0)
+        size_count = stats.get('compared_by_size', 0)
+        hash_pct = (hash_count / total_compared * 100) if total_compared > 0 else 0
+        size_pct = (size_count / total_compared * 100) if total_compared > 0 else 0
+        print(f"   - Compared by hash:         {hash_count:>6} ({hash_pct:.1f}%)")
+        print(f"   - Compared by size:         {size_count:>6} ({size_pct:.1f}%)")
+
+    # Show FileHash column statistics if any hash operations occurred
+    total_hash_ops = (stats.get('hash_new_saved', 0) + stats.get('hash_updated', 0) +
+                     stats.get('hash_matched', 0) + stats.get('hash_save_failed', 0))
+    if total_hash_ops > 0:
+        print(f"\n[HASH] FileHash Column Statistics:")
+        if stats.get('hash_new_saved', 0) > 0:
+            print(f"   - New hashes saved:         {stats.get('hash_new_saved', 0):>6}")
+        if stats.get('hash_updated', 0) > 0:
+            print(f"   - Hashes updated:           {stats.get('hash_updated', 0):>6}")
+        if stats.get('hash_matched', 0) > 0:
+            print(f"   - Hash matches (skipped):   {stats.get('hash_matched', 0):>6}")
+        if stats.get('hash_save_failed', 0) > 0:
+            print(f"   - Hash save failures:       {stats.get('hash_save_failed', 0):>6}")
+
     print(f"\n[DATA] Transfer Summary:")
     print(f"   - Data uploaded:   {format_bytes(stats['bytes_uploaded'])}")
     print(f"   - Data skipped:    {format_bytes(stats['bytes_skipped'])}")
@@ -579,28 +605,36 @@ def perform_sync_deletion(root_drive, local_files, base_path, config):
         print(f"\n[DEBUG] Building local file set (base_path: {base_path})...")
 
     for local_file in local_files:
-        # Calculate relative path from base_path
-        if base_path and os.path.isabs(local_file):
+        # Calculate relative path from base_path (preserve folder structure!)
+        # This MUST match how upload_file_with_structure calculates paths
+        if base_path:
             try:
                 rel_path = os.path.relpath(local_file, base_path)
             except ValueError:
                 # On Windows, relpath fails if paths are on different drives
-                rel_path = os.path.basename(local_file)
+                # Fall back to absolute path calculation
+                rel_path = local_file
         else:
-            rel_path = os.path.basename(local_file)
+            # No base_path means upload to root - use full path
+            rel_path = local_file
 
         # Normalize path separators to forward slashes (SharePoint style)
         rel_path = rel_path.replace(os.sep, '/')
+        rel_path = rel_path.replace('\\', '/')  # Extra safety for Windows paths
 
         # Handle markdown to HTML conversion
         if local_file.lower().endswith('.md') and config.convert_md_to_html:
             # If converting .md to .html, the SharePoint file will be .html
             rel_path = rel_path[:-3] + '.html'
 
+        # Sanitize path to match how uploader sanitizes
+        from sharepoint_sync.file_handler import sanitize_path_components
+        rel_path = sanitize_path_components(rel_path)
+
         local_files_set.add(rel_path)
 
         if debug_enabled:
-            print(f"  [+] Local: {rel_path}")
+            print(f"  [+] Local: {local_file} → {rel_path}")
 
     if debug_enabled:
         print(f"\n[DEBUG] Local files set contains {len(local_files_set)} items")

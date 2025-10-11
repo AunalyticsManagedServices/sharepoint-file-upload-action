@@ -1252,6 +1252,10 @@ def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
         # Get all children in the current folder
         children = drive.children.get().select(["name", "file", "folder", "size", "id"]).execute_query()
 
+        if debug_enabled and not current_path:
+            # Only show this message for the root folder
+            print(f"\n[DEBUG] SharePoint folder contains {len(children)} items")
+
         for child in children:
             # Build the relative path for this item
             item_path = f"{current_path}/{child.name}" if current_path else child.name
@@ -1298,6 +1302,13 @@ def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
         if is_debug_metadata_enabled():
             import traceback
             print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+
+    # Debug summary for root folder only
+    if debug_enabled and not current_path and len(files) > 0:
+        print(f"[DEBUG] Returning {len(files)} FILES (folders excluded)")
+        print(f"[DEBUG] Sample files (first 5):")
+        for f in files[:5]:
+            print(f"  - {f['path']} ({f['size']} bytes)")
 
     return files
 
