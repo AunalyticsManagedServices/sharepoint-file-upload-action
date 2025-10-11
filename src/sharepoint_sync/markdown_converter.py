@@ -25,6 +25,10 @@ def sanitize_mermaid_code(mermaid_code):
     - Problematic node prefixes ("o", "x" create unintended edges)
     - HTML tags except <br>
     - Curly braces in comments
+    - Diamond/rhombus nodes {}
+    - Other node shapes (>], [>, etc.)
+    - Edge labels (text between pipes on arrows)
+    - Double pipe issues in edge syntax
 
     Args:
         mermaid_code (str): Raw Mermaid diagram definition
@@ -46,66 +50,105 @@ def sanitize_mermaid_code(mermaid_code):
     # Match patterns like [end], (end), or "end" but not "append", "ending", etc.
     sanitized = re.sub(r'\b(end)\b', 'End', sanitized)
 
-    # 4. Escape special characters that break Mermaid syntax
-    # Use placeholders first, then replace with entity codes to avoid double-encoding
-    def sanitize_node_content(match):
-        """Replace special characters in node content with entity codes"""
-        content = match.group(1)
+    # 4. Fix double pipes in edge definitions (||) -> (|)
+    # Pattern: -->|| or ---|| or ||| should become -->| or ---|
+    sanitized = re.sub(r'(\-\->|\-\-\-)\|\|', r'\1|', sanitized)
+    sanitized = re.sub(r'\|\|(\w)', r'|\1', sanitized)
 
+    # 5. Escape special characters that break Mermaid syntax
+    # Use placeholders first, then replace with entity codes to avoid double-encoding
+    def sanitize_content(content):
+        """Replace special characters with entity codes using placeholders"""
         # Use temporary placeholders to avoid double-encoding
-        # Step 1: Replace with unique placeholders
         content = content.replace('&', '___AMP___')
         content = content.replace('#', '___HASH___')
         content = content.replace('%', '___PERCENT___')
         content = content.replace('|', '___PIPE___')
         content = content.replace('"', '___QUOTE___')
 
-        # Step 2: Replace placeholders with entity codes (no more re-encoding possible)
+        # Replace placeholders with entity codes
         content = content.replace('___AMP___', '&#38;')
         content = content.replace('___HASH___', '&#35;')
         content = content.replace('___PERCENT___', '&#37;')
         content = content.replace('___PIPE___', '&#124;')
         content = content.replace('___QUOTE___', "'")  # Use single quote instead
 
-        return f'[{content}]'
+        return content
+
+    def sanitize_node_content(match):
+        """Replace special characters in square bracket node content"""
+        content = match.group(1)
+        return f'[{sanitize_content(content)}]'
 
     # Apply sanitization to content inside square brackets []
     sanitized = re.sub(r'\[([^\]]*)\]', sanitize_node_content, sanitized)
 
-    # 5. Handle parentheses-based node shapes: (text), ((text)), etc.
+    # 6. Handle parentheses-based node shapes: (text), ((text)), etc.
     def sanitize_paren_content(match):
         """Replace special characters in parentheses node content"""
-        full_match = match.group(0)
         opening_parens = match.group(1)
         content = match.group(2)
         closing_parens = match.group(3)
 
-        # Same approach with placeholders
-        content = content.replace('&', '___AMP___')
-        content = content.replace('#', '___HASH___')
-        content = content.replace('%', '___PERCENT___')
-        content = content.replace('|', '___PIPE___')
-        content = content.replace('"', '___QUOTE___')
-
-        content = content.replace('___AMP___', '&#38;')
-        content = content.replace('___HASH___', '&#35;')
-        content = content.replace('___PERCENT___', '&#37;')
-        content = content.replace('___PIPE___', '&#124;')
-        content = content.replace('___QUOTE___', "'")
-
-        return f'{opening_parens}{content}{closing_parens}'
+        return f'{opening_parens}{sanitize_content(content)}{closing_parens}'
 
     # Match single or multiple parentheses: (text), ((text)), (((text)))
     sanitized = re.sub(r'(\(+)([^()]+)(\)+)', sanitize_paren_content, sanitized)
 
-    # 6. Fix nodes starting with "o" or "x" which create unintended edges
+    # 7. Handle curly brace diamond/rhombus nodes: {text}, {{text}}
+    def sanitize_curly_content(match):
+        """Replace special characters in curly brace node content"""
+        opening_braces = match.group(1)
+        content = match.group(2)
+        closing_braces = match.group(3)
+
+        return f'{opening_braces}{sanitize_content(content)}{closing_braces}'
+
+    # Match single or double curly braces: {text}, {{text}}
+    sanitized = re.sub(r'(\{+)([^{}]+)(\}+)', sanitize_curly_content, sanitized)
+
+    # 8. Handle trapezoid node shapes: [/text\] and [\text/]
+    def sanitize_trapezoid_content(match):
+        """Replace special characters in trapezoid node content"""
+        opening = match.group(1)
+        content = match.group(2)
+        closing = match.group(3)
+
+        return f'{opening}{sanitize_content(content)}{closing}'
+
+    # Match trapezoid patterns
+    sanitized = re.sub(r'(\[/)(.*?)(\\\])', sanitize_trapezoid_content, sanitized)
+    sanitized = re.sub(r'(\[\\\x5c)(.*?)(/\])', sanitize_trapezoid_content, sanitized)
+
+    # 9. Handle hexagon node shapes: {{text}}
+    # Already handled by curly brace sanitization above
+
+    # 10. Handle edge labels (text between pipes on arrows)
+    # Pattern: -->|text| or ---|text|--- etc.
+    def sanitize_edge_label(match):
+        """Replace special characters in edge labels"""
+        prefix = match.group(1)
+        label = match.group(2)
+        suffix = match.group(3)
+
+        # For edge labels, only escape quotes and special chars that break syntax
+        # Don't escape pipes since they're delimiters
+        label_sanitized = label.replace('"', "'")
+        label_sanitized = label_sanitized.replace('&', '&#38;')
+        label_sanitized = label_sanitized.replace('#', '&#35;')
+        label_sanitized = label_sanitized.replace('%', '&#37;')
+
+        return f'{prefix}|{label_sanitized}|{suffix}'
+
+    # Match edge labels: arrow followed by |text| followed by arrow or node
+    sanitized = re.sub(r'(--[>-])\|([^|]+)\|(--[>-]|\s+\w)', sanitize_edge_label, sanitized)
+
+    # 11. Fix nodes starting with "o" or "x" which create unintended edges
     # Add a space after node ID if it starts with o/x
-    # Pattern: matches "A o--> B" and changes to "A  o--> B"
     sanitized = re.sub(r'(\w+)\s+([ox])---', r'\1  \2---', sanitized)
     sanitized = re.sub(r'(\w+)\s+([ox])-->', r'\1  \2-->', sanitized)
 
-    # 7. Remove curly braces from comments (they confuse the renderer)
-    # Pattern: %% comment {with braces} -> %% comment with braces
+    # 12. Remove curly braces from comments (they confuse the renderer)
     def remove_braces_from_comments(match):
         comment_text = match.group(1)
         return f'%% {comment_text.replace("{", "").replace("}", "")}'

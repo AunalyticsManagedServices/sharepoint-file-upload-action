@@ -168,7 +168,6 @@ def ensure_folder_exists(parent_drive, folder_path):
                     current_drive = created_folder
                     created_folders[current_path] = created_folder
                     if is_debug_enabled():
-                        if is_debug_enabled():
                         print(f"[✓] Created folder: {current_path}")
 
                 except Exception as add_error:

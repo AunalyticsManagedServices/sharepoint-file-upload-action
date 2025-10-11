@@ -625,11 +625,21 @@ The action automatically sanitizes Mermaid diagrams to fix common syntax issues 
 |-------|-----|--------|
 | `<br/>` tags | Changed to `<br>` | Mermaid doesn't support XHTML self-closing syntax |
 | Double quotes `"` in labels | Changed to single quotes `'` | Prevents syntax errors in node definitions |
-| Special characters (`#`, `%`, `&`, `\|`) | Converted to HTML entities | These break Mermaid parser |
+| Special characters (`#`, `%`, `&`, `\|`) in nodes | Converted to HTML entities | These break Mermaid parser |
+| Double pipes `\|\|` in edges | Changed to single pipe `\|` | Invalid edge syntax causes parse errors |
+| Pipes in diamond nodes `{}` | Escaped as `&#124;` | Unescaped pipes break diamond/rhombus syntax |
+| Pipes in edge labels | Properly delimited | Ensures edge labels parse correctly |
 | Reserved word `end` | Changed to `End` | Lowercase "end" breaks flowcharts |
 | Nodes starting with `o` or `x` | Spacing adjusted | Prevents unintended edge creation |
 | HTML tags (except `<br>`) | Removed | Only `<br>` is supported for line breaks |
 | Curly braces in comments | Removed | Confuses the Mermaid renderer |
+
+**Enhanced Node Shape Support:**
+- Square brackets `[]`
+- Parentheses `()`, `(())`
+- Diamond/rhombus `{}`, `{{}}`
+- Trapezoids `[/\]`, `[\\/]`
+- All shapes properly sanitized with special character escaping
 
 This sanitization happens automatically during conversion - no action required on your part!
 
