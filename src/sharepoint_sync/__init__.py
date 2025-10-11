@@ -54,7 +54,7 @@ from .file_handler import (
 )
 from .uploader import upload_file, upload_file_with_structure, ensure_folder_exists
 from .markdown_converter import convert_markdown_to_html
-from .utils import get_library_name_from_path, is_debug_mode
+from .utils import get_library_name_from_path, is_debug_metadata_enabled, is_debug_enabled
 
 __all__ = [
     # Configuration
@@ -84,5 +84,6 @@ __all__ = [
     'print_rate_limiting_summary',
     # Utilities
     'get_library_name_from_path',
-    'is_debug_mode',
+    'is_debug_metadata_enabled',
+    'is_debug_enabled',
 ]

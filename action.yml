@@ -1,6 +1,6 @@
 # action.yaml
-name: 'Upload File to Sharepoint'
-description: 'Upload one or more files in a directory to Sharepoint site using client ID'
+name: 'Sync to SharePoint'
+description: 'Upload one or more files in a directory to Sharepoint site using client ID and secret'
 inputs:
   file_path:
     description: 'Source file path (glob ok)'

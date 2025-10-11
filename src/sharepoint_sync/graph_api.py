@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from office365.graph_client import GraphClient
 from .auth import acquire_token
 from .monitoring import rate_monitor
-from .utils import is_debug_mode
+from .utils import is_debug_metadata_enabled, is_debug_enabled
 
 # Load environment variables
 load_dotenv()
@@ -40,14 +40,15 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, pa
     Raises:
         Exception: If all retries are exhausted or non-retryable error occurs
     """
-    debug_metadata = is_debug_mode()
+    debug_metadata = is_debug_metadata_enabled()
 
     for attempt in range(max_retries + 1):
         try:
             # Add proactive delay if approaching rate limits
             if rate_monitor.should_slow_down() and attempt > 0:
                 delay = 2 ** attempt
-                print(f"[⚠] Proactive rate limiting delay: {delay}s")
+                if is_debug_enabled():
+                    print(f"[⚠] Proactive rate limiting delay: {delay}s")
                 time.sleep(delay)
 
             # Make the request based on method
@@ -73,7 +74,8 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, pa
                     wait_seconds = 60  # Default to 60 seconds if header is malformed
 
                 if attempt < max_retries:
-                    print(f"[!] Rate limited (429). Waiting {wait_seconds} seconds before retry {attempt + 1}/{max_retries}...")
+                    if is_debug_enabled():
+                        print(f"[!] Rate limited (429). Waiting {wait_seconds} seconds before retry {attempt + 1}/{max_retries}...")
                     if debug_metadata:
                         print(f"[DEBUG] Retry-After header: {retry_after}")
                         print(f"[DEBUG] Rate limit response: {response.text[:300]}")
@@ -88,13 +90,15 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, pa
                 # Server error - retry with exponential backoff
                 if attempt < max_retries:
                     wait_seconds = (2 ** attempt) + 1  # 1, 3, 7 seconds
-                    print(f"[!] Server error ({response.status_code}). Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
+                    if is_debug_enabled():
+                        print(f"[!] Server error ({response.status_code}). Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
                     if debug_metadata:
                         print(f"[DEBUG] Server error response: {response.text[:300]}")
                     time.sleep(wait_seconds)
                     continue
                 else:
-                    print(f"[!] Server errors exhausted all retries. Final response:")
+                    if is_debug_enabled():
+                        print(f"[!] Server errors exhausted all retries. Final response:")
                     print(f"[DEBUG] {response.text[:500]}")
                     raise Exception(f"Graph API server error: {response.status_code} after {max_retries} retries")
 
@@ -138,13 +142,13 @@ def get_column_internal_name_mapping(site_id, list_id, token, graph_endpoint):
     # Check cache first
     cache_key = (site_id, list_id)
     if cache_key in column_mapping_cache:
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
         if debug_metadata:
             print(f"[=] Using cached column mappings for site/list")
         return column_mapping_cache[cache_key]
 
     try:
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
 
         url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/columns"
         headers = {
@@ -175,13 +179,15 @@ def get_column_internal_name_mapping(site_id, list_id, token, graph_endpoint):
                 }
 
                 if debug_metadata:
-                    print(f"[=] Column mapping: '{display_name}' -> '{internal_name}' ({column_type})")
+                    if is_debug_enabled():
+                        print(f"[=] Column mapping: '{display_name}' -> '{internal_name}' ({column_type})")
 
             # Cache the result
             column_mapping_cache[cache_key] = mapping
 
             if debug_metadata:
-                print(f"[OK] Cached {len(mapping)} column mappings")
+                if is_debug_enabled():
+                    print(f"[OK] Cached {len(mapping)} column mappings")
 
             return mapping
         else:
@@ -218,12 +224,13 @@ def resolve_field_name(site_id, list_id, token, graph_endpoint, field_name):
         - Falls back to case-insensitive matching if exact match not found
     """
     try:
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
 
         # First check if it's already an internal name by checking for hex encoding
         if '_x00' in field_name or (not any(c.isupper() for c in field_name) and '_' in field_name):
             if debug_metadata:
-                print(f"[=] '{field_name}' appears to be internal name (contains hex encoding)")
+                if is_debug_enabled():
+                    print(f"[=] '{field_name}' appears to be internal name (contains hex encoding)")
             return field_name
 
         # Get column mapping
@@ -233,7 +240,8 @@ def resolve_field_name(site_id, list_id, token, graph_endpoint, field_name):
         if field_name in column_mapping:
             internal_name = column_mapping[field_name]['internal_name']
             if debug_metadata:
-                print(f"[OK] Resolved '{field_name}' to internal name '{internal_name}'")
+                if is_debug_enabled():
+                    print(f"[OK] Resolved '{field_name}' to internal name '{internal_name}'")
             return internal_name
 
         # Try case-insensitive match
@@ -520,7 +528,7 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
     """
     try:
         # Get debug flag
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
 
         # Get token for Graph API
         token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
@@ -702,7 +710,7 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
 
     except Exception as e:
         print(f"[!] Error getting list item by filename: {str(e)[:400]}")
-        if is_debug_mode():
+        if is_debug_metadata_enabled():
             import traceback
             print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
         return None
@@ -729,7 +737,7 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
     """
     try:
         # Get debug flag
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
 
         # Get token for Graph API
         token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
@@ -846,7 +854,7 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
 
     except Exception as e:
         print(f"[!] Error updating list item field: {str(e)[:400]}")
-        if is_debug_mode():
+        if is_debug_metadata_enabled():
             import traceback
             print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
         return False
@@ -874,7 +882,7 @@ def test_column_accessibility(site_id, list_id, token, graph_endpoint, internal_
         Uses $select to request specific field, which will fail if field is not accessible
     """
     try:
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
 
         # Try to get list items with specific field selection
         url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items"
@@ -894,34 +902,36 @@ def test_column_accessibility(site_id, list_id, token, graph_endpoint, internal_
         response = make_graph_request_with_retry(url, headers, params=params)
 
         if response.status_code == 200:
-            # Check if we can access the field in the response
+            # Query succeeded - column is accessible
             data = response.json()
             items = data.get('value', [])
 
             if items and 'fields' in items[0]:
-                # Column is accessible if it appears in fields (even if None)
+                # Check if column appears in the fields
                 fields = items[0]['fields']
-                if internal_name in fields or any(k.lower() == internal_name.lower() for k in fields.keys()):
-                    if debug_metadata:
-                        print(f"[OK] Column '{internal_name}' is accessible")
-                    return True
+                column_in_fields = internal_name in fields or any(k.lower() == internal_name.lower() for k in fields.keys())
 
-            # If no items, assume accessible if query succeeded
-            if not items:
                 if debug_metadata:
-                    print(f"[OK] Column '{internal_name}' query succeeded (no items to verify)")
+                    if column_in_fields:
+                        print(f"[OK] Column '{internal_name}' found in item fields")
+                    else:
+                        print(f"[=] Column '{internal_name}' not in first item (may be new/empty)")
+
+                # Return True regardless - if query succeeds, column is accessible
+                # It just might not have values yet
                 return True
 
+            # No items in list - column still accessible (list is empty)
             if debug_metadata:
-                print(f"[!] Column '{internal_name}' not found in response fields")
-            return False
+                print(f"[OK] Column '{internal_name}' accessible (list has no items yet)")
+            return True
         else:
             if debug_metadata:
                 print(f"[!] Column '{internal_name}' accessibility test failed: {response.status_code}")
             return False
 
     except Exception as e:
-        if is_debug_mode():
+        if is_debug_metadata_enabled():
             print(f"[!] Error testing column accessibility: {e}")
         return False
 
@@ -966,7 +976,7 @@ def comprehensive_column_verification(site_id, list_id, token, graph_endpoint, c
         Use verify_column_for_filehash_operations() for FileHash-specific validation.
     """
     try:
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
 
         if debug_metadata:
             print(f"[=] Starting comprehensive verification for column '{column_name}'")
@@ -1003,14 +1013,40 @@ def comprehensive_column_verification(site_id, list_id, token, graph_endpoint, c
                 print(f"[DEBUG] Available columns (first 10): {available_columns}")
             return None
 
+        # Debug: Show raw column data
+        if debug_metadata:
+            print(f"[DEBUG] Raw column data from Graph API:")
+            print(f"[DEBUG] Column keys: {list(target_column.keys())}")
+            # Show which type property exists
+            type_props = [k for k in target_column.keys() if k in ['text', 'number', 'dateTime', 'boolean', 'choice', 'lookup', 'calculated']]
+            if type_props:
+                print(f"[DEBUG] Type properties found: {type_props}")
+
         # Step 3: Analyze column properties
+        # Determine column type by checking which type-specific property exists
+        column_type = ''
+        if 'text' in target_column:
+            column_type = 'text'
+        elif 'number' in target_column:
+            column_type = 'number'
+        elif 'dateTime' in target_column:
+            column_type = 'dateTime'
+        elif 'boolean' in target_column:
+            column_type = 'boolean'
+        elif 'choice' in target_column:
+            column_type = 'choice'
+        elif 'lookup' in target_column:
+            column_type = 'lookup'
+        elif 'calculated' in target_column:
+            column_type = 'calculated'
+
         column_analysis = {
             'exists': True,
             'display_name': target_column.get('displayName', ''),
             'internal_name': target_column.get('name', ''),
             'id': target_column.get('id', ''),
             'description': target_column.get('description', ''),
-            'type': target_column.get('type', ''),
+            'type': column_type,  # Detected from which property exists
             'required': target_column.get('required', False),
             'hidden': target_column.get('hidden', False),
             'indexed': target_column.get('indexed', False),
@@ -1070,7 +1106,7 @@ def comprehensive_column_verification(site_id, list_id, token, graph_endpoint, c
 
     except Exception as e:
         print(f"[!] Error in comprehensive column verification: {e}")
-        if is_debug_mode():
+        if is_debug_metadata_enabled():
             import traceback
             print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
         return None
@@ -1104,7 +1140,7 @@ def verify_column_for_filehash_operations(site_id, list_id, token, graph_endpoin
         - Hidden status (should not be hidden)
     """
     try:
-        debug_metadata = is_debug_mode()
+        debug_metadata = is_debug_metadata_enabled()
 
         if debug_metadata:
             print(f"[=] Verifying FileHash column for operations...")
@@ -1150,7 +1186,7 @@ def verify_column_for_filehash_operations(site_id, list_id, token, graph_endpoin
 
     except Exception as e:
         error_msg = f"Error during verification: {str(e)[:200]}"
-        if is_debug_mode():
+        if is_debug_metadata_enabled():
             print(f"[!] {error_msg}")
             import traceback
             print(f"[DEBUG] Full traceback: {traceback.format_exc()}")

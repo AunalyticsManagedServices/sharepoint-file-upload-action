@@ -8,6 +8,7 @@ This module provides functions for file sanitization, hashing, comparison, and e
 import os
 import xxhash
 import fnmatch
+from .utils import is_debug_enabled
 
 
 def sanitize_sharepoint_name(name, is_folder=False):
@@ -94,7 +95,8 @@ def sanitize_sharepoint_name(name, is_folder=False):
 
     # Log if name was changed
     if sanitized != name:
-        print(f"[!] Sanitized name: '{name}' -> '{sanitized}'")
+        if is_debug_enabled():
+            print(f"[!] Sanitized name: '{name}' -> '{sanitized}'")
 
     return sanitized
 
@@ -181,7 +183,8 @@ def calculate_file_hash(file_path):
 
         return hasher.hexdigest()
     except Exception as e:
-        print(f"[!] Error calculating hash for {file_path}: {e}")
+        if is_debug_enabled():
+            print(f"[!] Error calculating hash for {file_path}: {e}")
         return None
 
 
@@ -304,7 +307,8 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
     # Calculate local file hash upfront for efficiency
     local_hash = calculate_file_hash(local_path)
     if local_hash:
-        print(f"[#] Local hash: {local_hash[:8]}... for {sanitized_name}")
+        if is_debug_enabled():
+            print(f"[#] Local hash: {local_hash[:8]}... for {sanitized_name}")
 
     # Get local file information
     local_size = os.path.getsize(local_path)
@@ -313,7 +317,8 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
     debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
 
     # Debug: Show what we're checking
-    print(f"[?] Checking if file exists in SharePoint: {sanitized_name}")
+    if is_debug_enabled():
+        print(f"[?] Checking if file exists in SharePoint: {sanitized_name}")
 
     try:
         # Get all children in the folder to find our file
@@ -331,7 +336,8 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
 
         if existing_file is None:
             # File not found in folder
-            print(f"[+] New file to upload: {sanitized_name}")
+            if is_debug_enabled():
+                print(f"[+] New file to upload: {sanitized_name}")
             return True, False, None, local_hash
 
         # First check if this is a file or folder
@@ -388,7 +394,8 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
 
         if is_folder:
             # It's definitely a folder
-            print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
+            if is_debug_enabled():
+                print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
             return True, False, None, local_hash
 
         # Treat as file if it has file property or if we can't determine type
@@ -442,17 +449,20 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
 
                     if remote_hash:
                         hash_comparison_available = True
-                        print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
+                        if is_debug_enabled():
+                            print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
 
                         # Compare hashes - this is the most reliable comparison
                         if local_hash and local_hash == remote_hash:
-                            print(f"[=] File unchanged (hash match): {sanitized_name}")
+                            if is_debug_enabled():
+                                print(f"[=] File unchanged (hash match): {sanitized_name}")
                             if upload_stats_dict:
                                 upload_stats_dict['skipped_files'] += 1
                                 upload_stats_dict['bytes_skipped'] += local_size
                             return False, True, existing_file, local_hash
                         elif local_hash:
-                            print(f"[*] File changed (hash mismatch): {sanitized_name}")
+                            if is_debug_enabled():
+                                print(f"[*] File changed (hash mismatch): {sanitized_name}")
                             return True, True, existing_file, local_hash
                     elif debug_metadata:
                         print(f"[DEBUG] FileHash not found in list item fields")
@@ -476,7 +486,8 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
             # For files, try to get size if not already available
             if not hasattr(existing_file, 'size'):
                 try:
-                    print(f"[?] Fetching file size for comparison: {sanitized_name}")
+                    if is_debug_enabled():
+                        print(f"[?] Fetching file size for comparison: {sanitized_name}")
                     # Try to refresh the item's properties
                     # Just use the existing_file object directly since we already have it
                     existing_file = existing_file.get().select(["size", "name", "file", "folder"]).execute_query()
@@ -520,7 +531,8 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
 
             if remote_size is None:
                 # If we still can't get size, log detailed info
-                print(f"[!] Cannot determine remote file size for: {sanitized_name}")
+                if is_debug_enabled():
+                    print(f"[!] Cannot determine remote file size for: {sanitized_name}")
                 print(f"[DEBUG] Object type: {type(existing_file).__name__}")
                 print(f"[DEBUG] Object attributes: {[attr for attr in dir(existing_file) if not attr.startswith('_')][:20]}...")
                 return True, True, existing_file, local_hash
@@ -530,17 +542,20 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
             needs_update = not size_matches
 
             if not needs_update:
-                print(f"[=] File unchanged (size: {local_size:,} bytes): {sanitized_name}")
+                if is_debug_enabled():
+                    print(f"[=] File unchanged (size: {local_size:,} bytes): {sanitized_name}")
                 if upload_stats_dict:
                     upload_stats_dict['skipped_files'] += 1
                     upload_stats_dict['bytes_skipped'] += local_size
             else:
-                print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
+                if is_debug_enabled():
+                    print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
 
             return needs_update, True, existing_file, local_hash
         else:
             # Item exists but it's not a file or folder we can identify
-            print(f"[?] Unable to determine type of existing item: {sanitized_name}")
+            if is_debug_enabled():
+                print(f"[?] Unable to determine type of existing item: {sanitized_name}")
             return True, False, None, local_hash
 
     except Exception as e:
@@ -548,7 +563,8 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
         # Check if it's actually a 404 or another error
         error_str = str(e)
         if "404" in error_str or "not found" in error_str.lower() or "itemNotFound" in error_str:
-            print(f"[+] New file to upload: {sanitized_name}")
+            if is_debug_enabled():
+                print(f"[+] New file to upload: {sanitized_name}")
         else:
             # Some other error occurred
             print(f"[?] Error checking file existence: {e}")

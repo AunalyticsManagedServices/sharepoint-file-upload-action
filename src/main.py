@@ -296,6 +296,7 @@ from sharepoint_sync.file_handler import should_exclude_path, calculate_file_has
 from sharepoint_sync.uploader import upload_file_with_structure, upload_file, ensure_folder_exists
 from sharepoint_sync.markdown_converter import convert_markdown_to_html
 from sharepoint_sync.monitoring import upload_stats, print_rate_limiting_summary
+from sharepoint_sync.utils import is_debug_enabled
 
 
 # ====================================================================
@@ -339,7 +340,7 @@ def discover_files(file_path, recursive, exclude_patterns_list):
     if exclude_patterns_list:
         local_items = [item for item in local_items_unfiltered if not should_exclude_path(item, exclude_patterns_list)]
         excluded_count = len(local_items_unfiltered) - len(local_items)
-        if excluded_count > 0:
+        if excluded_count > 0 and is_debug_enabled():
             print(f"[=] Excluded {excluded_count} item(s) matching exclusion patterns")
     else:
         local_items = local_items_unfiltered
@@ -434,7 +435,8 @@ def process_markdown_file(file_path, root_drive, base_path, config, filehash_ava
     Returns:
         bool: True if processing succeeded, False if failed
     """
-    print(f"[MD] Converting markdown file: {file_path}")
+    if is_debug_enabled():
+        print(f"[MD] Converting markdown file: {file_path}")
 
     try:
         # Read the markdown file
@@ -463,9 +465,10 @@ def process_markdown_file(file_path, root_drive, base_path, config, filehash_ava
         # Get the size and hash of the newly converted HTML file
         html_file_size = os.path.getsize(html_path)
         html_hash = calculate_file_hash(html_path)
-        print(f"[HTML] Converted HTML size: {html_file_size:,} bytes")
-        if html_hash:
-            print(f"[#] HTML hash: {html_hash[:8]}...")
+        if is_debug_enabled():
+            print(f"[HTML] Converted HTML size: {html_file_size:,} bytes")
+            if html_hash:
+                print(f"[#] HTML hash: {html_hash[:8]}...")
 
         # Get the relative path structure from the original markdown
         if base_path:
@@ -531,12 +534,14 @@ def process_markdown_file(file_path, root_drive, base_path, config, filehash_ava
                                 if remote_hash:
                                     hash_comparison_used = True
                                     if remote_hash == html_hash:
-                                        print(f"[=] HTML unchanged (hash match): {desired_html_filename}")
+                                        if is_debug_enabled():
+                                            print(f"[=] HTML unchanged (hash match): {desired_html_filename}")
                                         html_needs_update = False
                                         upload_stats.increment('skipped_files')
                                         upload_stats.add_bytes_skipped(html_file_size)
                                     else:
-                                        print(f"[*] HTML changed (hash mismatch): {desired_html_filename}")
+                                        if is_debug_enabled():
+                                            print(f"[*] HTML changed (hash mismatch): {desired_html_filename}")
                                         upload_stats.increment('replaced_files')
                                     break
                                 elif debug_metadata:
@@ -568,27 +573,33 @@ def process_markdown_file(file_path, root_drive, base_path, config, filehash_ava
                         if remote_size is not None:
                             # Compare sizes - less reliable for HTML due to conversion variations
                             if remote_size == html_file_size:
-                                print(f"[=] HTML unchanged (size: {html_file_size:,} bytes): {desired_html_filename}")
+                                if is_debug_enabled():
+                                    print(f"[=] HTML unchanged (size: {html_file_size:,} bytes): {desired_html_filename}")
                                 html_needs_update = False
                                 upload_stats.increment('skipped_files')
                                 upload_stats.add_bytes_skipped(html_file_size)
                             else:
-                                print(f"[*] HTML size changed (local: {html_file_size:,} vs remote: {remote_size:,}): {desired_html_filename}")
+                                if is_debug_enabled():
+                                    print(f"[*] HTML size changed (local: {html_file_size:,} vs remote: {remote_size:,}): {desired_html_filename}")
                                 upload_stats.increment('replaced_files')
                         else:
                             # Could not get size, assume needs update
-                            print(f"[!] Cannot determine remote HTML size, will upload: {desired_html_filename}")
+                            if is_debug_enabled():
+                                print(f"[!] Cannot determine remote HTML size, will upload: {desired_html_filename}")
                     break
 
             if not html_found:
-                print(f"[+] New HTML file to upload: {desired_html_filename}")
+                if is_debug_enabled():
+                    print(f"[+] New HTML file to upload: {desired_html_filename}")
                 upload_stats.increment('new_files')
         except Exception as check_error:
-            print(f"[!] Could not check existing HTML, will upload: {check_error}")
+            if is_debug_enabled():
+                print(f"[!] Could not check existing HTML, will upload: {check_error}")
 
         # Only upload if the HTML needs updating
         if html_needs_update:
-            print(f"[] Processing file: {original_html_path} (from temp: {html_path})")
+            if is_debug_enabled():
+                            print(f"[] Processing file: {original_html_path} (from temp: {html_path})")
             for i in range(config.max_retry):
                 try:
                     upload_file(
@@ -608,7 +619,8 @@ def process_markdown_file(file_path, root_drive, base_path, config, filehash_ava
                         print(f"[!] Retrying upload... ({i+1}/{config.max_retry})")
                         time.sleep(2)
         else:
-            print(f"[-] Skipping HTML upload - file is identical in SharePoint")
+            if is_debug_enabled():
+                print(f"[-] Skipping HTML upload - file is identical in SharePoint")
 
         # Clean up temporary HTML file (whether uploaded or skipped)
         if os.path.exists(html_path):
@@ -653,7 +665,7 @@ def print_summary(total_files):
 
     # Create visual separator for better readability
     print("\n" + "="*60)
-    print("[] SYNC PROCESS COMPLETED")
+    print("[✓] SYNC PROCESS COMPLETED")
     print("="*60)
 
     # Show detailed statistics
@@ -773,7 +785,7 @@ def main():
         # Execute the query to test connection and permissions
         # This also initializes the root_drive object for use
         root_drive.get().execute_query()
-        print(f"[] Connected to SharePoint at: {config.upload_path}")
+        print(f"[✓] Connected to SharePoint at: {config.upload_path}")
 
         # Check and create FileHash column if needed
         library_name = get_library_name_from_path(config.upload_path)
@@ -785,7 +797,7 @@ def main():
             config.login_endpoint, config.graph_endpoint
         )
         if filehash_column_available:
-            print("[] FileHash column is available for hash-based comparison")
+            print("[✓] FileHash column is available for hash-based comparison")
         else:
             print("[!] FileHash column not available, will use size-based comparison")
 
@@ -819,7 +831,8 @@ def main():
                 )
             elif f.lower().endswith('.md') and not config.convert_md_to_html:
                 # Markdown conversion is disabled, upload as-is
-                print(f"[MD] Uploading markdown file as-is (conversion disabled): {f}")
+                if is_debug_enabled():
+                    print(f"[MD] Uploading markdown file as-is (conversion disabled): {f}")
                 upload_file_with_structure(
                     root_drive, f, base_path, config.tenant_url, library_name,
                     4*1024*1024, config.force_upload, filehash_column_available,

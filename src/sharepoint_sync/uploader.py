@@ -25,6 +25,7 @@ from .graph_api import (
     update_sharepoint_list_item_field,
     get_sharepoint_list_item_by_filename
 )
+from .utils import is_debug_enabled
 
 # Global cache for created folders
 # Using a dictionary (path -> DriveItem) to avoid redundant API calls
@@ -103,7 +104,8 @@ def ensure_folder_exists(parent_drive, folder_path):
         folder_found = False  # Flag to track if folder exists
 
         try:
-            print(f"[?] Checking if folder exists: {current_path}")
+            if is_debug_enabled():
+                print(f"[?] Checking if folder exists: {current_path}")
 
             # Get all items (files and folders) in current folder
             # execute_query() sends the API request and waits for response
@@ -118,7 +120,8 @@ def ensure_folder_exists(parent_drive, folder_path):
                     # Folder found! Update references and cache it
                     current_drive = child
                     created_folders[current_path] = child
-                    print(f"[✓] Folder already exists: {current_path}")
+                    if is_debug_enabled():
+                        print(f"[✓] Folder already exists: {current_path}")
                     folder_found = True
                     break  # Stop searching once found
 
@@ -132,7 +135,8 @@ def ensure_folder_exists(parent_drive, folder_path):
         # ============================================================
         if not folder_found:
             try:
-                print(f"[+] Creating folder: {folder_name}")
+                if is_debug_enabled():
+                    print(f"[+] Creating folder: {folder_name}")
 
                 # For Office365-REST-Python-Client v2.6.2, use create_folder method
                 # This is a built-in method specifically for folder creation
@@ -140,12 +144,14 @@ def ensure_folder_exists(parent_drive, folder_path):
 
                 current_drive = created_folder
                 created_folders[current_path] = created_folder
-                print(f"[✓] Created folder: {current_path}")
+                if is_debug_enabled():
+                    print(f"[✓] Created folder: {current_path}")
 
             except AttributeError:
                 # If create_folder method doesn't exist, try alternative approach
                 try:
-                    print(f"[!] create_folder not available, trying add() method")
+                    if is_debug_enabled():
+                        print(f"[!] create_folder not available, trying add() method")
 
                     # Create a DriveItem instance for the folder
                     new_folder = DriveItem(current_drive.context)
@@ -160,7 +166,8 @@ def ensure_folder_exists(parent_drive, folder_path):
 
                     current_drive = created_folder
                     created_folders[current_path] = created_folder
-                    print(f"[✓] Created folder: {current_path}")
+                    if is_debug_enabled():
+                        print(f"[✓] Created folder: {current_path}")
 
                 except Exception as add_error:
                     print(f"[!] add() method failed: {add_error}")
@@ -171,7 +178,8 @@ def ensure_folder_exists(parent_drive, folder_path):
 
                 # Check if folder already exists (common race condition)
                 if "nameAlreadyExists" in error_msg or "already exists" in error_msg.lower():
-                    print(f"[!] Folder already exists (race condition): {folder_name}")
+                    if is_debug_enabled():
+                        print(f"[!] Folder already exists (race condition): {folder_name}")
                     try:
                         # Try to get the existing folder
                         children = current_drive.children.get().execute_query()
@@ -179,7 +187,8 @@ def ensure_folder_exists(parent_drive, folder_path):
                             if child.name == folder_name and hasattr(child, 'folder'):
                                 current_drive = child
                                 created_folders[current_path] = child
-                                print(f"[✓] Found existing folder: {current_path}")
+                                if is_debug_enabled():
+                                    print(f"[✓] Found existing folder: {current_path}")
                                 break
                     except Exception as fallback_error:
                         # Couldn't retrieve existing folder - will use parent
@@ -189,12 +198,14 @@ def ensure_folder_exists(parent_drive, folder_path):
 
                     # Fallback: Try to navigate to folder in case it exists
                     try:
-                        print(f"[!] Attempting to navigate to folder: {folder_name}")
+                        if is_debug_enabled():
+                            print(f"[!] Attempting to navigate to folder: {folder_name}")
                         test_folder = current_drive.get_by_path(folder_name).get().execute_query()
                         if test_folder and hasattr(test_folder, 'folder'):
                             current_drive = test_folder
                             created_folders[current_path] = test_folder
-                            print(f"[✓] Successfully navigated to folder: {current_path}")
+                            if is_debug_enabled():
+                                print(f"[✓] Successfully navigated to folder: {current_path}")
                         else:
                             raise Exception("Not a folder")
                     except Exception as nav_error:
@@ -207,14 +218,16 @@ def ensure_folder_exists(parent_drive, folder_path):
 
 def progress_status(offset, file_size):
     """Display upload progress."""
-    print(f"Uploaded {offset} bytes from {file_size} bytes ... {offset/file_size*100:.2f}%")
+    if is_debug_enabled():
+        print(f"Uploaded {offset} bytes from {file_size} bytes ... {offset/file_size*100:.2f}%")
 
 
 def success_callback(remote_file, local_path, display_name=None):
     """Display success message after file upload."""
     # Use display_name if provided (for temp files), otherwise use local_path
     file_display = display_name if display_name else local_path
-    print(f"[✓] File {file_display} has been uploaded to {remote_file.web_url}")
+    if is_debug_enabled():
+        print(f"[✓] File {file_display} has been uploaded to {remote_file.web_url}")
 
 
 def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, timeout_secs):
@@ -237,7 +250,8 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
     try:
         print(f"[] Using built-in upload method for large file: {sanitized_name}")
         if sanitized_name != file_name:
-            print(f"    (Original name: {file_name})")
+            if is_debug_enabled():
+                print(f"    (Original name: {file_name})")
         with open(local_path, 'rb') as f:
             # Note: The built-in method might need the sanitized name set differently
             # We'll rely on the library to handle this correctly
@@ -246,9 +260,11 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
             return
     except AttributeError:
         # Method doesn't exist, continue with manual session
-        print(f"[!] Built-in large file upload not available, using manual session")
+        if is_debug_enabled():
+            print(f"[!] Built-in large file upload not available, using manual session")
     except Exception as e:
-        print(f"[!] Built-in upload failed: {e}, trying manual session")
+        if is_debug_enabled():
+            print(f"[!] Built-in upload failed: {e}, trying manual session")
 
     # Manual upload session creation
     def _start_upload():
@@ -320,11 +336,13 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
                 os.remove(temp_path)
 
         except Exception as fallback_error:
-            print(f"[!] Fallback upload also failed: {fallback_error}")
+            if is_debug_enabled():
+                print(f"[!] Fallback upload also failed: {fallback_error}")
 
             # Last resort: Use the original UrlPath approach
             # (keeping for compatibility with older library versions)
-            print(f"[!] Using original UrlPath approach as last resort")
+            if is_debug_enabled():
+                print(f"[!] Using original UrlPath approach as last resort")
             return_type = DriveItem(
                 drive.context,
                 UrlPath(sanitized_name, drive.resource_path))
@@ -376,15 +394,19 @@ def check_and_delete_existing_file(drive, file_name):
         # Verify it's a file, not a folder with the same name
         # Files don't have a 'folder' attribute, folders do
         if not hasattr(existing_file, 'folder'):
-            print(f"[!] Existing file found: {sanitized_name}")
+            if is_debug_enabled():
+                print(f"[!] Existing file found: {sanitized_name}")
             if sanitized_name != file_name:
-                print(f"    (Original name: {file_name})")
-            print(f"[×] Deleting existing file to prepare for replacement...")
+                if is_debug_enabled():
+                    print(f"    (Original name: {file_name})")
+            if is_debug_enabled():
+                print(f"[×] Deleting existing file to prepare for replacement...")
 
             # Delete the file from SharePoint
             # delete_object() marks for deletion, execute_query() performs it
             existing_file.delete_object().execute_query()
-            print(f"[✓] Existing file deleted successfully")
+            if is_debug_enabled():
+                print(f"[✓] Existing file deleted successfully")
 
             # Brief pause to ensure SharePoint processes the deletion
             # Some SharePoint instances need this to avoid conflicts
@@ -392,7 +414,8 @@ def check_and_delete_existing_file(drive, file_name):
             return True  # Signal that file was replaced
         else:
             # Edge case: A folder exists with the same name as our file
-            print(f"[!] Found folder with same name as file: {file_name}")
+            if is_debug_enabled():
+                print(f"[!] Found folder with same name as file: {file_name}")
             return False
 
     except Exception:
@@ -450,10 +473,12 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
 
         # If file exists but needs update, delete it first
         if exists and needs_update:
-            print(f"[×] Deleting outdated file to prepare for update...")
+            if is_debug_enabled():
+                print(f"[×] Deleting outdated file to prepare for update...")
             try:
                 remote_file.delete_object().execute_query()
-                print(f"[✓] Outdated file deleted successfully")
+                if is_debug_enabled():
+                    print(f"[✓] Outdated file deleted successfully")
                 time.sleep(0.5)  # Brief pause for SharePoint to process
                 upload_stats_dict['replaced_files'] += 1
             except Exception as e:
@@ -461,19 +486,22 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
 
             print(f"[] Uploading updated file: {sanitized_name}")
             if sanitized_name != file_name:
-                print(f"    (Original name: {file_name})")
+                if is_debug_enabled():
+                    print(f"    (Original name: {file_name})")
         else:
             # New file
             print(f"[] Uploading new file: {sanitized_name}")
             if sanitized_name != file_name:
-                print(f"    (Original name: {file_name})")
+                if is_debug_enabled():
+                    print(f"    (Original name: {file_name})")
             upload_stats_dict['new_files'] += 1
     else:
         # Force upload mode - always delete and reupload with new hash
         # Calculate hash now since we skipped check_file_needs_update
         local_hash = calculate_file_hash(local_path)
         if local_hash:
-            print(f"[#] Calculated hash for force upload: {local_hash[:8]}...")
+            if is_debug_enabled():
+                print(f"[#] Calculated hash for force upload: {local_hash[:8]}...")
 
         file_was_deleted = check_and_delete_existing_file(drive, file_name)
         if file_was_deleted:
@@ -494,7 +522,8 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
         effective_chunk_size = chunk_size
         if has_multiple_periods or is_appx_file:
             effective_chunk_size = 250 * 1024 * 1024  # 250MB
-            print(f"[!] Special file detected, using direct upload for files under 250MB")
+            if is_debug_enabled():
+                print(f"[!] Special file detected, using direct upload for files under 250MB")
 
         # Set upload path (temp variables already initialized at function start)
         upload_path = local_path
@@ -553,7 +582,8 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
         # Try to set the FileHash metadata if we have a hash using direct REST API
         if local_hash:
             try:
-                print(f"[#] Setting FileHash metadata...")
+                if is_debug_enabled():
+                    print(f"[#] Setting FileHash metadata...")
 
                 # Debug logging for FileHash setting
                 debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
@@ -587,12 +617,15 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
                     )
 
                     if success:
-                        print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
+                        if is_debug_enabled():
+                            print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
 
                     else:
-                        print(f"[!] Failed to set FileHash metadata via REST API")
+                        if is_debug_enabled():
+                            print(f"[!] Failed to set FileHash metadata via REST API")
                 else:
-                    print(f"[!] Could not find list item for uploaded file to set hash metadata")
+                    if is_debug_enabled():
+                        print(f"[!] Could not find list item for uploaded file to set hash metadata")
 
             except Exception as hash_error:
                 print(f"[!] Could not set FileHash metadata via REST API: {str(hash_error)[:200]}")
@@ -605,11 +638,13 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
                 if temp_dir_created and os.path.exists(temp_dir_created):
                     # Clean up the entire temp directory for HTML files
                     shutil.rmtree(temp_dir_created)
-                    print(f"[!] Cleaned up temp directory after error: {temp_dir_created}")
+                    if is_debug_enabled():
+                        print(f"[!] Cleaned up temp directory after error: {temp_dir_created}")
                 elif temp_path and os.path.exists(temp_path):
                     # Clean up individual temp file for regular files
                     os.remove(temp_path)
-                    print(f"[!] Cleaned up temp file after error: {temp_path}")
+                    if is_debug_enabled():
+                        print(f"[!] Cleaned up temp file after error: {temp_path}")
             except Exception as cleanup_error:
                 print(f"[!] Warning: Could not delete temp file/dir: {cleanup_error}")
 
@@ -663,7 +698,8 @@ def upload_file_with_structure(root_drive, local_file_path, base_path, site_url,
 
     # Log if path was sanitized
     if sanitized_rel_path != rel_path:
-        print(f"[!] Path sanitized for SharePoint: {rel_path} -> {sanitized_rel_path}")
+        if is_debug_enabled():
+            print(f"[!] Path sanitized for SharePoint: {rel_path} -> {sanitized_rel_path}")
 
     # If there's a directory structure, create it in SharePoint
     # Note: ensure_folder_exists will sanitize folder names internally
