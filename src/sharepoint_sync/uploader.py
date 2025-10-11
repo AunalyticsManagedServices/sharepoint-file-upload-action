@@ -445,7 +445,8 @@ def check_and_delete_existing_file(drive, file_name):
 
 def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name,
                 filehash_column_available, tenant_id, client_id, client_secret,
-                login_endpoint, graph_endpoint, upload_stats_dict, desired_name=None):
+                login_endpoint, graph_endpoint, upload_stats_dict, desired_name=None,
+                metadata_queue=None):
     """
     Upload a file to SharePoint/OneDrive, intelligently skipping unchanged files.
 
@@ -463,6 +464,7 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
     :param graph_endpoint: Microsoft Graph API endpoint
     :param upload_stats_dict: Dictionary to track upload statistics
     :param desired_name: Optional desired filename in SharePoint (for temp file uploads)
+    :param metadata_queue: Optional BatchQueue for batching metadata updates (parallel mode)
     """
     # Use desired_name if provided (for HTML conversions), otherwise use actual filename
     file_name = desired_name if desired_name else os.path.basename(local_path)
@@ -606,12 +608,6 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
         # Try to set the FileHash metadata if we have a hash using direct REST API
         if local_hash:
             try:
-                if is_debug_enabled():
-                    print(f"[#] Setting FileHash metadata...")
-
-                # Debug logging for FileHash setting
-                debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
-
                 # First get the list item data to find the item ID
                 list_item_data = get_sharepoint_list_item_by_filename(
                     site_url, list_name, sanitized_name,
@@ -621,47 +617,63 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
                 if list_item_data and 'id' in list_item_data:
                     item_id = list_item_data['id']
 
-                    if debug_metadata:
-                        print(f"[DEBUG] Setting FileHash for {sanitized_name}")
-                        print(f"[DEBUG] SharePoint list item ID: {item_id}")
-                        print(f"[DEBUG] About to set FileHash to: {local_hash}")
-
-                    # Update the FileHash field using REST API
-                    success = update_sharepoint_list_item_field(
-                        site_url,
-                        list_name,
-                        item_id,
-                        'FileHash',
-                        local_hash,
-                        tenant_id,
-                        client_id,
-                        client_secret,
-                        login_endpoint,
-                        graph_endpoint
-                    )
-
-                    if success:
+                    # Check if we should queue this for batch processing or process immediately
+                    if metadata_queue is not None:
+                        # Parallel mode: Queue metadata update for batch processing
+                        metadata_queue.put((item_id, sanitized_name, local_hash, is_file_update))
                         if is_debug_enabled():
-                            print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
-
-                        # Track hash save statistics
-                        if is_file_update:
-                            upload_stats_dict['hash_updated'] = upload_stats_dict.get('hash_updated', 0) + 1
-                        else:
-                            upload_stats_dict['hash_new_saved'] = upload_stats_dict.get('hash_new_saved', 0) + 1
-
+                            print(f"[#] Queued FileHash metadata update for batch processing")
                     else:
+                        # Sequential mode: Update immediately (backward compatibility)
                         if is_debug_enabled():
-                            print(f"[!] Failed to set FileHash metadata via REST API")
-                        upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
+                            print(f"[#] Setting FileHash metadata...")
+
+                        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+                        if debug_metadata:
+                            print(f"[DEBUG] Setting FileHash for {sanitized_name}")
+                            print(f"[DEBUG] SharePoint list item ID: {item_id}")
+                            print(f"[DEBUG] About to set FileHash to: {local_hash}")
+
+                        # Update the FileHash field using REST API
+                        success = update_sharepoint_list_item_field(
+                            site_url,
+                            list_name,
+                            item_id,
+                            'FileHash',
+                            local_hash,
+                            tenant_id,
+                            client_id,
+                            client_secret,
+                            login_endpoint,
+                            graph_endpoint
+                        )
+
+                        if success:
+                            if is_debug_enabled():
+                                print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
+
+                            # Track hash save statistics
+                            if is_file_update:
+                                upload_stats_dict['hash_updated'] = upload_stats_dict.get('hash_updated', 0) + 1
+                            else:
+                                upload_stats_dict['hash_new_saved'] = upload_stats_dict.get('hash_new_saved', 0) + 1
+
+                        else:
+                            if is_debug_enabled():
+                                print(f"[!] Failed to set FileHash metadata via REST API")
+                            upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
                 else:
                     if is_debug_enabled():
                         print(f"[!] Could not find list item for uploaded file to set hash metadata")
-                    upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
+                    # Only track failure in sequential mode (batch mode handles stats after processing)
+                    if metadata_queue is None:
+                        upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
 
             except Exception as hash_error:
                 print(f"[!] Could not set FileHash metadata via REST API: {str(hash_error)[:200]}")
-                upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
+                # Only track failure in sequential mode (batch mode handles stats after processing)
+                if metadata_queue is None:
+                    upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
                 # Continue anyway - file is uploaded successfully
 
     except Exception as e:
@@ -688,7 +700,7 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
 def upload_file_with_structure(root_drive, local_file_path, base_path, site_url, list_name,
                                 chunk_size, force_upload, filehash_column_available,
                                 tenant_id, client_id, client_secret, login_endpoint,
-                                graph_endpoint, upload_stats_dict, max_retry=3):
+                                graph_endpoint, upload_stats_dict, max_retry=3, metadata_queue=None):
     """
     Upload a file maintaining its directory structure
 
@@ -707,6 +719,7 @@ def upload_file_with_structure(root_drive, local_file_path, base_path, site_url,
     :param graph_endpoint: Microsoft Graph API endpoint
     :param upload_stats_dict: Dictionary to track upload statistics
     :param max_retry: Maximum number of retry attempts (default: 3)
+    :param metadata_queue: Optional BatchQueue for batching metadata updates (parallel mode)
 
     Compatible with Office365-REST-Python-Client v2.6.2
     """
@@ -750,7 +763,7 @@ def upload_file_with_structure(root_drive, local_file_path, base_path, site_url,
                 target_folder, local_file_path, chunk_size, force_upload,
                 site_url, list_name, filehash_column_available,
                 tenant_id, client_id, client_secret, login_endpoint,
-                graph_endpoint, upload_stats_dict
+                graph_endpoint, upload_stats_dict, metadata_queue=metadata_queue
             )
             break
         except Exception as e:

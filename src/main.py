@@ -300,6 +300,7 @@ from sharepoint_sync.uploader import upload_file_with_structure, upload_file, en
 from sharepoint_sync.markdown_converter import convert_markdown_to_html
 from sharepoint_sync.monitoring import upload_stats, print_rate_limiting_summary
 from sharepoint_sync.utils import is_debug_enabled
+from sharepoint_sync.parallel_uploader import ParallelUploader
 
 
 # ====================================================================
@@ -408,243 +409,6 @@ def calculate_base_path(local_files, local_dirs):
         base_path = os.path.dirname(os.path.commonpath(local_files))
 
     return base_path
-
-
-# ====================================================================
-# MARKDOWN FILE PROCESSING
-# ====================================================================
-
-def process_markdown_file(file_path, root_drive, base_path, config, filehash_available, library_name, converted_files):
-    """
-    Process and upload a markdown file as HTML with Mermaid diagram conversion.
-
-    This function:
-    1. Reads the markdown file
-    2. Converts to HTML with Mermaid diagrams as SVG
-    3. Creates a temporary HTML file
-    4. Checks if the HTML needs updating (hash/size comparison)
-    5. Uploads if needed
-    6. Cleans up temporary files
-
-    Args:
-        file_path (str): Path to the .md file
-        root_drive: SharePoint drive object
-        base_path (str): Base path for relative path calculation
-        config: Configuration object with settings
-        filehash_available (bool): Whether FileHash column is available
-        library_name (str): SharePoint library name
-        converted_files (set): Set to track converted markdown files
-
-    Returns:
-        bool: True if processing succeeded, False if failed
-    """
-    if is_debug_enabled():
-        print(f"[MD] Converting markdown file: {file_path}")
-
-    try:
-        # Read the markdown file
-        with open(file_path, 'r', encoding='utf-8') as md_file:
-            md_content = md_file.read()
-
-        # Convert to HTML
-        html_content = convert_markdown_to_html(md_content, os.path.basename(file_path))
-
-        # Create HTML file in temp directory to avoid permission issues
-        # Use a simple prefix to avoid confusion - the actual filename will be set during upload
-        temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix='converted_md_')
-
-        try:
-            # Write HTML file to temp location
-            with os.fdopen(temp_html_fd, 'w', encoding='utf-8') as html_file:
-                html_file.write(html_content)
-        except Exception as write_error:
-            os.close(temp_html_fd)  # Ensure file descriptor is closed
-            raise write_error
-
-        # Check if HTML needs updating before upload
-        # Create a synthetic path that matches the original .md location but with .html extension
-        original_html_path = file_path.replace('.md', '.html')
-
-        # Get the size and hash of the newly converted HTML file
-        html_file_size = os.path.getsize(html_path)
-        html_hash = calculate_file_hash(html_path)
-        if is_debug_enabled():
-            print(f"[HTML] Converted HTML size: {html_file_size:,} bytes")
-            if html_hash:
-                print(f"[#] HTML hash: {html_hash[:8]}...")
-
-        # Get the relative path structure from the original markdown
-        if base_path:
-            rel_path = os.path.relpath(original_html_path, base_path)
-        else:
-            rel_path = original_html_path
-
-        # Normalize and sanitize the path
-        rel_path = rel_path.replace('\\', '/')
-        sanitized_rel_path = sanitize_path_components(rel_path)
-
-        # Get the directory path for the HTML file (same as markdown)
-        dir_path = os.path.dirname(sanitized_rel_path)
-
-        # Create folder structure if needed
-        if dir_path and dir_path != "." and dir_path != "":
-            target_folder = ensure_folder_exists(root_drive, dir_path)
-        else:
-            target_folder = root_drive
-
-        # Check if HTML file exists in SharePoint and compare hashes or sizes
-        desired_html_filename = os.path.basename(original_html_path)
-        html_needs_update = True  # Default to uploading
-        hash_comparison_used = False
-
-        try:
-            # Check if HTML already exists in SharePoint
-            children = target_folder.children.get().select(["name", "size", "file", "id"]).execute_query()
-            html_found = False
-            for child in children:
-                child_name = getattr(child, 'name', None)
-                if child_name and child_name == desired_html_filename:
-                    html_found = True
-
-                    # Get debug flag (used throughout comparison logic)
-                    debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
-
-                    # First try hash comparison if available using direct REST API
-                    if html_hash and filehash_available:
-                        try:
-                            # Use direct Graph API REST calls to get SharePoint list item with custom columns
-                            list_item_data = get_sharepoint_list_item_by_filename(
-                                config.tenant_url, library_name, desired_html_filename,
-                                config.tenant_id, config.client_id, config.client_secret,
-                                config.login_endpoint, config.graph_endpoint
-                            )
-
-                            if list_item_data and 'fields' in list_item_data:
-                                fields = list_item_data['fields']
-
-                                if debug_metadata:
-                                    print(f"[DEBUG] Retrieving FileHash for HTML {desired_html_filename}")
-                                    print(f"[DEBUG] HTML REST API list item data: {type(list_item_data)}")
-                                    print(f"[DEBUG] HTML fields data: {type(fields)}")
-                                    print(f"[DEBUG] HTML available field properties: {list(fields.keys())}")
-                                    print(f"[DEBUG] HTML FileHash in properties: {'FileHash' in fields}")
-                                    if 'FileHash' in fields:
-                                        print(f"[DEBUG] HTML FileHash value: {fields.get('FileHash')}")
-
-                                # Try to get FileHash from the fields
-                                remote_hash = fields.get('FileHash')
-
-                                if remote_hash:
-                                    hash_comparison_used = True
-                                    if remote_hash == html_hash:
-                                        if is_debug_enabled():
-                                            print(f"[=] HTML unchanged (hash match): {desired_html_filename}")
-                                        html_needs_update = False
-                                        upload_stats.increment('skipped_files')
-                                        upload_stats.add_bytes_skipped(html_file_size)
-                                    else:
-                                        if is_debug_enabled():
-                                            print(f"[*] HTML changed (hash mismatch): {desired_html_filename}")
-                                        upload_stats.increment('replaced_files')
-                                    break
-                                elif debug_metadata:
-                                    print(f"[DEBUG] HTML FileHash not found in list item fields")
-                            elif debug_metadata:
-                                print(f"[DEBUG] Could not retrieve HTML list item data for {desired_html_filename}")
-
-                        except Exception as html_hash_error:
-                            # Hash comparison failed, fall back to size
-                            if debug_metadata:
-                                print(f"[DEBUG] HTML hash comparison failed: {str(html_hash_error)[:100]}")
-                            pass
-
-                    # Fall back to size comparison if hash wasn't available
-                    if not hash_comparison_used:
-                        # Found existing HTML file - try multiple ways to get size
-                        remote_size = None
-
-                        # Try Graph API DriveItem properties
-                        if hasattr(child, 'size') and child.size is not None:
-                            remote_size = child.size
-                        # Try SharePoint File properties
-                        elif hasattr(child, 'length') and child.length is not None:
-                            remote_size = child.length
-                        # Try properties dictionary
-                        elif hasattr(child, 'properties'):
-                            remote_size = child.properties.get('size') or child.properties.get('Size') or child.properties.get('length') or child.properties.get('Length')
-
-                        if remote_size is not None:
-                            # Compare sizes - less reliable for HTML due to conversion variations
-                            if remote_size == html_file_size:
-                                if is_debug_enabled():
-                                    print(f"[=] HTML unchanged (size: {html_file_size:,} bytes): {desired_html_filename}")
-                                html_needs_update = False
-                                upload_stats.increment('skipped_files')
-                                upload_stats.add_bytes_skipped(html_file_size)
-                            else:
-                                if is_debug_enabled():
-                                    print(f"[*] HTML size changed (local: {html_file_size:,} vs remote: {remote_size:,}): {desired_html_filename}")
-                                upload_stats.increment('replaced_files')
-                        else:
-                            # Could not get size, assume needs update
-                            if is_debug_enabled():
-                                print(f"[!] Cannot determine remote HTML size, will upload: {desired_html_filename}")
-                    break
-
-            if not html_found:
-                if is_debug_enabled():
-                    print(f"[+] New HTML file to upload: {desired_html_filename}")
-                upload_stats.increment('new_files')
-        except Exception as check_error:
-            if is_debug_enabled():
-                print(f"[!] Could not check existing HTML, will upload: {check_error}")
-
-        # Only upload if the HTML needs updating
-        if html_needs_update:
-            if is_debug_enabled():
-                            print(f"[→] Processing file: {original_html_path} (from temp: {html_path})")
-            for i in range(config.max_retry):
-                try:
-                    upload_file(
-                        target_folder, html_path, 4*1024*1024, config.force_upload,
-                        config.tenant_url, library_name, filehash_available,
-                        config.tenant_id, config.client_id, config.client_secret,
-                        config.login_endpoint, config.graph_endpoint,
-                        upload_stats.stats, desired_name=desired_html_filename
-                    )
-                    break
-                except Exception as e:
-                    print(f"[Error] Upload failed: {e}, {type(e)}")
-                    if i == config.max_retry - 1:
-                        print(f"[Error] Failed to upload {original_html_path} after {config.max_retry} attempts")
-                        raise e
-                    else:
-                        print(f"[!] Retrying upload... ({i+1}/{config.max_retry})")
-                        time.sleep(2)
-        else:
-            if is_debug_enabled():
-                print(f"[-] Skipping HTML upload - file is identical in SharePoint")
-
-        # Clean up temporary HTML file (whether uploaded or skipped)
-        if os.path.exists(html_path):
-            os.remove(html_path)
-
-        # Mark this markdown file as converted
-        converted_files.add(file_path)
-        return True
-
-    except Exception as e:
-        print(f"[Error] Failed to convert markdown file {file_path}: {e}")
-        print(f"[!] Uploading original markdown file instead")
-        # Fall back to uploading the markdown file as-is
-        upload_file_with_structure(
-            root_drive, file_path, base_path, config.tenant_url, library_name,
-            4*1024*1024, config.force_upload, filehash_available,
-            config.tenant_id, config.client_id, config.client_secret,
-            config.login_endpoint, config.graph_endpoint,
-            upload_stats.stats, config.max_retry
-        )
-        return False
 
 
 # ====================================================================
@@ -896,6 +660,18 @@ def main():
     # Parse configuration from command-line arguments
     config = parse_config()
 
+    # Display system configuration stats box
+    print("\n" + "="*60)
+    print("[✓] SYSTEM CONFIGURATION")
+    print("="*60)
+    cpu_count = os.cpu_count() or 4
+    print(f"CPU Cores Available:       {cpu_count}")
+    print(f"Upload Workers:            {config.max_upload_workers} (concurrent uploads)")
+    print(f"Hash Workers:              {config.max_hash_workers} (parallel hashing)")
+    print(f"Markdown Workers:          {config.max_markdown_workers} (parallel conversion)")
+    print(f"Batch Metadata Updates:    Enabled (20 items/batch)")
+    print("="*60 + "\n")
+
     # Show sync mode to user
     if config.force_upload:
         print("[!] Force upload mode enabled - all files will be uploaded regardless of changes")
@@ -980,47 +756,30 @@ def main():
         print("    - You have appropriate permissions")
         sys.exit(1)  # Exit with error code
 
-    # Main upload loop - process each file
+    # Parallel upload - process all files concurrently
     # Track converted files to avoid uploading .md files when .html versions exist
     converted_md_files = set()
 
-    for f in local_files:
-        # Safety check: Verify item is still a file (not deleted/moved)
-        if os.path.isfile(f):
-            # Check if this is a markdown file and conversion is enabled
-            if f.lower().endswith('.md') and config.convert_md_to_html:
-                process_markdown_file(
-                    f,
-                    root_drive,
-                    base_path,
-                    config,
-                    filehash_column_available,
-                    library_name,
-                    converted_md_files
-                )
-            elif f.lower().endswith('.md') and not config.convert_md_to_html:
-                # Markdown conversion is disabled, upload as-is
-                if is_debug_enabled():
-                    print(f"[MD] Uploading markdown file as-is (conversion disabled): {f}")
-                upload_file_with_structure(
-                    root_drive, f, base_path, config.tenant_url, library_name,
-                    4*1024*1024, config.force_upload, filehash_column_available,
-                    config.tenant_id, config.client_id, config.client_secret,
-                    config.login_endpoint, config.graph_endpoint,
-                    upload_stats.stats, config.max_retry
-                )
-            elif f not in converted_md_files:
-                # Regular file, not markdown or not converted
-                upload_file_with_structure(
-                    root_drive, f, base_path, config.tenant_url, library_name,
-                    4*1024*1024, config.force_upload, filehash_column_available,
-                    config.tenant_id, config.client_id, config.client_secret,
-                    config.login_endpoint, config.graph_endpoint,
-                    upload_stats.stats, config.max_retry
-                )
-        else:
-            # File might have been deleted/moved since discovery
-            print(f"[Warning] Skipping {f} as it's not a file")
+    # Show parallel processing info
+    print(f"[OK] Using parallel processing (Upload workers: {config.max_upload_workers}, Hash workers: {config.max_hash_workers})")
+
+    # Initialize parallel uploader with auto-detected workers
+    parallel_uploader = ParallelUploader(
+        max_workers=config.max_upload_workers,
+        upload_stats_instance=upload_stats,
+        batch_metadata_updates=True  # Always use batch metadata updates
+    )
+
+    # Process all files in parallel
+    failed_count = parallel_uploader.process_files(
+        local_files,
+        root_drive,
+        base_path,
+        config,
+        filehash_column_available,
+        library_name,
+        converted_md_files
+    )
 
     # Perform sync deletion if enabled
     if config.sync_delete:
@@ -1033,11 +792,15 @@ def main():
 
     # Exit with appropriate code
     # Exit code 0 = success, 1 = failure
-    if upload_stats.stats['failed_files'] > 0:
+    total_failed = failed_count + upload_stats.stats['failed_files']
+    if total_failed > 0:
         # Some files failed - signal error to CI system
+        print(f"[!] {total_failed} file(s) failed to process")
         sys.exit(1)
 
     # If we get here, all uploads succeeded (exit code 0 is implicit)
+    if is_debug_enabled():
+        print("[✓] All files processed successfully")
 
 
 if __name__ == "__main__":

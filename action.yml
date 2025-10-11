@@ -59,6 +59,14 @@ inputs:
     description: 'Preview deletions without actually deleting (requires sync_delete=true)'
     required: false
     default: "true"
+  max_upload_workers:
+    description: 'Maximum concurrent upload workers (1-10, default: 4 for Graph API limits)'
+    required: false
+    default: "4"
+  max_hash_workers:
+    description: 'Maximum hash calculation workers (default: CPU count for optimal performance)'
+    required: false
+    default: ""
 outputs:
   return:
     description: 'Function output'
@@ -84,3 +92,5 @@ runs:
     - ${{ inputs.exclude_patterns }}
     - ${{ inputs.sync_delete }}
     - ${{ inputs.sync_delete_whatif }}
+    - ${{ inputs.max_upload_workers }}
+    - ${{ inputs.max_hash_workers }}

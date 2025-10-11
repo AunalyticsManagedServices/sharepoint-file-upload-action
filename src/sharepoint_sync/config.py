@@ -32,6 +32,8 @@ class Config:
         14. exclude_patterns (optional) - Comma-separated exclusion patterns (default: "")
         15. sync_delete (optional) - Delete SharePoint files not in sync set (default: False)
         16. sync_delete_whatif (optional) - Preview deletions without actually deleting (default: True)
+        17. max_upload_workers (optional) - Max concurrent uploads (default: 4, respects Graph API limits)
+        18. max_hash_workers (optional) - Max hash calculation workers (default: CPU count)
         """
         # Required arguments
         self.site_name = sys.argv[1]
@@ -52,6 +54,28 @@ class Config:
         self.exclude_patterns = sys.argv[14] if len(sys.argv) > 14 and sys.argv[14] else ""
         self.sync_delete = (sys.argv[15] if len(sys.argv) > 15 else "false").lower() == "true"
         self.sync_delete_whatif = (sys.argv[16] if len(sys.argv) > 16 else "true").lower() == "true"
+
+        # Parallel processing configuration (auto-detect optimal values)
+        import os as os_module
+        cpu_count = os_module.cpu_count() or 4
+
+        # Max upload workers: Default 4 (Graph API concurrent request limit)
+        # Can be overridden but should not exceed 10 to respect API limits
+        if len(sys.argv) > 17 and sys.argv[17]:
+            self.max_upload_workers = min(int(sys.argv[17]), 10)
+        else:
+            self.max_upload_workers = 4  # Safe default for Graph API
+
+        # Max hash workers: Default to CPU count for optimal parallel hashing
+        # Hash calculation is CPU-bound, so use all available cores
+        if len(sys.argv) > 18 and sys.argv[18]:
+            self.max_hash_workers = int(sys.argv[18])
+        else:
+            self.max_hash_workers = cpu_count  # Auto-detect optimal value
+
+        # Max markdown workers: Default 4 (mermaid-cli subprocess limit)
+        # Balance between parallelism and Chromium memory usage
+        self.max_markdown_workers = min(4, cpu_count)
 
         # Derived values
         self.tenant_url = f'https://{self.sharepoint_host_name}/sites/{self.site_name}'

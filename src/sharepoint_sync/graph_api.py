@@ -1351,3 +1351,204 @@ def delete_file_from_sharepoint(drive_item, file_path, whatif=False):
             import traceback
             print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         return False
+
+
+def batch_update_filehash_fields(site_url, list_name, updates_list,
+                                 tenant_id, client_id, client_secret,
+                                 login_endpoint, graph_endpoint, batch_size=20):
+    """
+    Update multiple FileHash fields in SharePoint using batch requests.
+
+    This function dramatically reduces API calls by grouping multiple metadata
+    updates into single batch requests. Instead of 100 individual PATCH requests,
+    this performs 5 batch requests (20 items each).
+
+    Args:
+        site_url (str): Full SharePoint site URL
+        list_name (str): Name of the document library
+        updates_list (list): List of (item_id, filename, hash_value) tuples
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): App registration client ID
+        client_secret (str): App registration client secret
+        login_endpoint (str): Azure AD endpoint
+        graph_endpoint (str): Graph API endpoint
+        batch_size (int): Items per batch request (max 20 for Graph API)
+
+    Returns:
+        dict: Mapping of {item_id: success_bool}
+              True if update succeeded, False otherwise
+
+    Example:
+        updates = [
+        ...     ('item1', 'file1.txt', 'hash1'),
+        ...     ('item2', 'file2.txt', 'hash2'),
+        ...     ('item3', 'file3.txt', 'hash3')
+        ... ]
+        results = batch_update_filehash_fields(
+        ...     site_url, lib_name, updates, ...
+        ... )
+        success_count = sum(results.values())
+
+    Note:
+        - 10-20x reduction in API calls vs individual updates
+        - Respects Graph API batch limit of 20 requests per batch
+        - Processes large update lists in multiple batches
+        - Falls back gracefully on batch failures
+        - Significantly reduces throttling risk
+    """
+    try:
+        debug_metadata = is_debug_metadata_enabled()
+
+        if not updates_list:
+            return {}
+
+        # Get token for Graph API
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+
+        if 'access_token' not in token:
+            print(f"[!] Failed to acquire token for batch updates: {token.get('error_description', 'Unknown error')}")
+            return {item_id: False for item_id, _, _ in updates_list}
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+
+        # Parse site URL to get site ID
+        site_parts = site_url.replace('https://', '').split('/')
+        host_name = site_parts[0]
+        site_name = site_parts[2] if len(site_parts) > 2 else ''
+
+        # Get site ID
+        site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
+        site_response = make_graph_request_with_retry(site_endpoint, headers, method='GET')
+
+        if site_response.status_code != 200:
+            print(f"[!] Failed to get site information for batch updates: {site_response.status_code}")
+            return {item_id: False for item_id, _, _ in updates_list}
+
+        site_data = site_response.json()
+        site_id = site_data.get('id')
+
+        if not site_id:
+            print("[!] Could not retrieve site ID for batch updates")
+            return {item_id: False for item_id, _, _ in updates_list}
+
+        # Get list ID
+        lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
+        lists_response = make_graph_request_with_retry(lists_endpoint, headers, method='GET')
+
+        if lists_response.status_code != 200:
+            print(f"[!] Failed to get lists for batch updates: {lists_response.status_code}")
+            return {item_id: False for item_id, _, _ in updates_list}
+
+        lists_data = lists_response.json()
+        list_id = None
+
+        for sp_list in lists_data.get('value', []):
+            if sp_list.get('displayName') == list_name or sp_list.get('name') == list_name:
+                list_id = sp_list.get('id')
+                break
+
+        if not list_id:
+            print(f"[!] Could not find list '{list_name}' for batch updates")
+            return {item_id: False for item_id, _, _ in updates_list}
+
+        # Process updates in batches
+        results = {}
+        total_batches = (len(updates_list) + batch_size - 1) // batch_size
+
+        if debug_metadata:
+            print(f"[DEBUG] Processing {len(updates_list)} updates in {total_batches} batches")
+
+        for batch_num in range(0, len(updates_list), batch_size):
+            batch = updates_list[batch_num:batch_num+batch_size]
+            batch_index = batch_num // batch_size + 1
+
+            if is_debug_enabled():
+                print(f"[#] Batch {batch_index}/{total_batches}: Updating {len(batch)} FileHash values...")
+
+            # Build JSON batch request
+            batch_request = {
+                "requests": []
+            }
+
+            for idx, (item_id, filename, hash_value) in enumerate(batch):
+                request_item = {
+                    "id": str(idx),
+                    "method": "PATCH",
+                    "url": f"/sites/{site_id}/lists/{list_id}/items/{item_id}/fields",
+                    "body": {"FileHash": hash_value},
+                    "headers": {"Content-Type": "application/json"}
+                }
+                batch_request["requests"].append(request_item)
+
+            # Send batch request
+            batch_endpoint = f"https://{graph_endpoint}/v1.0/$batch"
+
+            try:
+                batch_response = make_graph_request_with_retry(
+                    batch_endpoint,
+                    headers,
+                    method='POST',
+                    json_data=batch_request
+                )
+
+                if batch_response.status_code == 200:
+                    # Process batch response
+                    batch_results = batch_response.json().get('responses', [])
+
+                    for result in batch_results:
+                        request_id = int(result['id'])
+                        item_id, filename, hash_value = batch[request_id]
+
+                        # Check if update succeeded (2xx status code)
+                        success = 200 <= result['status'] < 300
+
+                        if success:
+                            results[item_id] = True
+                            if debug_metadata:
+                                print(f"[DEBUG] ✓ Updated FileHash for {filename}")
+                        else:
+                            results[item_id] = False
+                            if debug_metadata:
+                                print(f"[DEBUG] × Failed to update FileHash for {filename}: {result.get('status')}")
+
+                    if is_debug_enabled():
+                        success_count = sum(1 for r in batch_results if 200 <= r['status'] < 300)
+                        print(f"[✓] Batch {batch_index}: {success_count}/{len(batch)} updates succeeded")
+
+                else:
+                    # Entire batch failed
+                    print(f"[!] Batch {batch_index} request failed: {batch_response.status_code}")
+                    if debug_metadata:
+                        print(f"[DEBUG] Batch response: {batch_response.text[:500]}")
+
+                    # Mark all items in this batch as failed
+                    for item_id, _, _ in batch:
+                        results[item_id] = False
+
+            except Exception as batch_error:
+                print(f"[!] Error processing batch {batch_index}: {str(batch_error)[:200]}")
+
+                # Mark all items in this batch as failed
+                for item_id, _, _ in batch:
+                    results[item_id] = False
+
+        # Summary
+        total_success = sum(results.values())
+        total_failed = len(results) - total_success
+
+        if is_debug_enabled():
+            print(f"[#] Batch update summary: {total_success} succeeded, {total_failed} failed")
+
+        return results
+
+    except Exception as e:
+        print(f"[!] Batch update failed: {str(e)[:400]}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
+
+        # Return all failed
+        return {item_id: False for item_id, _, _ in updates_list}
