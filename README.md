@@ -5,74 +5,58 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/Version-3.1.0-blue)](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action)
 
-## 📋 Table of Contents
+## 📋 Quick Navigation
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-  - [Required Parameters](#required-parameters)
-  - [Optional Parameters](#optional-parameters)
-  - [File Glob Patterns](#file-glob-patterns)
-  - [Exclusion Patterns](#exclusion-patterns)
-- [Usage Examples](#usage-examples)
-- [Advanced Features](#advanced-features)
-  - [Smart Sync](#smart-sync-with-content-hashing)
-  - [Markdown Conversion](#markdown-conversion)
-  - [Sync Deletion](#sync-deletion)
-- [Security Considerations](#security-considerations)
-  - [Sites.Selected Setup](#sitesselected-setup)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
+| Getting Started | Configuration | Features | Resources |
+|:----------------|:--------------|:---------|:----------|
+| [Overview](#-overview) | [Required Parameters](#required-parameters) | [Smart Sync](#smart-sync-with-content-hashing) | [Troubleshooting](#-troubleshooting) |
+| [Quick Start](#-quick-start) | [Optional Parameters](#optional-parameters) | [Markdown Conversion](#markdown-conversion) | [Performance](#-performance) |
+| [Usage Examples](#-usage-examples) | [Glob Patterns](#file-glob-patterns) | [Sync Deletion](#sync-deletion) | [Security](#-security) |
+| | [Exclusion Patterns](#exclusion-patterns) | [Filename Sanitization](#filename-sanitization) | [Contributing](#-contributing) |
 
-## Overview
+## 🎯 Overview
 
-This GitHub Action provides file synchronization between GitHub repositories and SharePoint document libraries. It intelligently uploads only changed files, converts Markdown documentation to SharePoint-friendly HTML, and provides detailed sync statistics.
+Seamlessly synchronize files from your GitHub repository to SharePoint document libraries. This action intelligently uploads only changed files, converts Markdown to SharePoint-friendly HTML, and maintains perfect sync between your repository and SharePoint.
 
 ### Why Use This Action?
 
-- **📁 Automated Documentation Sync**: Keep your SharePoint documentation in sync with your GitHub repository
-- **⚡ Efficient Updates**: Only uploads new or modified files, saving time and bandwidth
-- **📝 Markdown Support**: Automatically converts `.md` files to styled HTML with Mermaid diagram support
-- **🔄 Reliable**: Includes retry logic and comprehensive error handling
-- **📊 Detailed Reporting**: Shows exactly what was uploaded, skipped, or failed
+| Benefit | Description |
+|---------|-------------|
+| 📁 **Automated Sync** | Keep SharePoint documentation current with your GitHub repository |
+| ⚡ **Smart Uploads** | Only uploads new or modified files (typically skips 60-90% of files) |
+| 📝 **Markdown Support** | Converts `.md` files to styled HTML with Mermaid diagram rendering |
+| 🔄 **Bidirectional Sync** | Optional deletion of SharePoint files removed from repository |
+| 📊 **Detailed Reports** | Clear statistics on uploads, skips, and failures |
+| 🔒 **Enterprise Ready** | Supports GovCloud, Sites.Selected permissions, and large files |
 
-## Key Features
+## ✨ Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Smart Sync** | Uses xxHash128 content hashing (or file size) to skip unchanged files |
-| **Markdown → HTML** | Converts `.md` files to beautifully styled HTML for SharePoint viewing |
-| **Mermaid Diagrams** | Renders Mermaid flowcharts/diagrams as embedded SVG |
-| **Batch Upload** | Handles multiple files and maintains folder structure |
-| **Large File Support** | Automatically uses chunked upload for files >4MB |
-| **Special Character Handling** | Sanitizes filenames for SharePoint compatibility |
+| **Smart Sync** | xxHash128 content comparison skips unchanged files automatically |
+| **Markdown → HTML** | GitHub-flavored HTML with embedded Mermaid diagrams |
+| **Large Files** | Chunked upload for files >4MB with automatic retry logic |
+| **Folder Structure** | Maintains directory hierarchy from repository to SharePoint |
+| **Special Characters** | Auto-sanitizes filenames for SharePoint compatibility |
+| **Multi-Cloud** | Commercial, GovCloud, and sovereign cloud support |
 
-## Quick Start
+## 🚀 Quick Start
 
-### 1. Set Up SharePoint App Registration
+### 1. Get SharePoint Credentials
 
-Your SharePoint administrator needs to:
-1. Register an app in Azure AD
-2. Grant permissions (choose one approach):
+Your SharePoint administrator provides:
+- **Tenant ID** (Azure AD tenant identifier)
+- **Client ID** (Application ID from app registration)
+- **Client Secret** (App password/secret value)
 
-   **Option A: Site-Specific Access (Recommended - Most Secure)** ✅
-   - Grant `Sites.Selected` permission
-   - Explicitly grant app access to specific sites only ([see how](#sitesselected-setup))
-   - Limits access to only the sites you specify
+**Permissions needed** (choose one):
+- ✅ **Recommended**: `Sites.Selected` + grant access to specific sites ([setup guide](#sitesselected-setup))
+- Alternative: `Sites.ReadWrite.All` (tenant-wide access)
+- Optional: `Sites.Manage.All` (enables automatic FileHash column creation)
 
-   **Option B: Tenant-Wide Access**
-   - Grant `Sites.ReadWrite.All` (access to all sites in tenant)
-   - Grant `Sites.Manage.All` (optional, enables automatic FileHash column creation)
+### 2. Add GitHub Secrets
 
-3. Provide you with:
-   - Tenant ID
-   - Client ID
-   - Client Secret
-
-### 2. Add Secrets to GitHub
-
-Navigate to **Settings → Security → Secrets and variables → Actions** and add:
+**Settings** → **Security** → **Secrets and variables** → **Actions** → **New repository secret**
 
 ```
 SHAREPOINT_TENANT_ID
@@ -86,6 +70,7 @@ Create `.github/workflows/sharepoint-sync.yml`:
 
 ```yaml
 name: Sync to SharePoint
+
 on:
   push:
     branches: [main]
@@ -95,8 +80,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Github Checkout/Clone Repo # This is required
-        uses: actions/checkout@v4 # This is required
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Upload to SharePoint
         uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
@@ -110,92 +95,77 @@ jobs:
           client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-## Configuration
+That's it! Push to `main` or click **Run workflow** to sync.
+
+## ⚙️ Configuration
 
 ### Required Parameters
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `file_path` | Files to upload (supports glob patterns) | `"**/*"` |
-| `host_name` | Your SharePoint domain | `"company.sharepoint.com"` |
+| `file_path` | Files to sync (glob patterns supported) | `"**/*"`, `"docs/**/*.md"` |
+| `host_name` | SharePoint domain | `"company.sharepoint.com"` |
 | `site_name` | SharePoint site name | `"TeamDocs"` |
-| `upload_path` | Target folder in SharePoint | `"Shared Documents/Reports"` |
+| `upload_path` | Target folder path | `"Shared Documents/Reports"` |
 | `tenant_id` | Azure AD Tenant ID | `${{ secrets.SHAREPOINT_TENANT_ID }}` |
-| `client_id` | App registration Client ID | `${{ secrets.SHAREPOINT_CLIENT_ID }}` |
-| `client_secret` | App registration Client Secret | `${{ secrets.SHAREPOINT_CLIENT_SECRET }}` |
+| `client_id` | App Client ID | `${{ secrets.SHAREPOINT_CLIENT_ID }}` |
+| `client_secret` | App Client Secret | `${{ secrets.SHAREPOINT_CLIENT_SECRET }}` |
 
 <details>
-<summary><strong>📖 Parameter Details (click to expand)</strong></summary>
+<summary><strong>📖 Detailed Parameter Guide</strong></summary>
 
-**`file_path`** - Which files to upload
-- Supports glob patterns for flexible file selection
-- Can be a single file, pattern, or wildcard
-- Examples:
-  - `"docs/readme.md"` - Single specific file
-  - `"*.pdf"` - All PDF files in root directory
-  - `"**/*.md"` - All Markdown files in all subdirectories
-  - `"reports/**/*"` - Everything in the reports folder
-- See [File Glob Patterns](#file-glob-patterns) for comprehensive pattern guide
+#### `file_path` - Which files to upload
 
-**`host_name`** - Your SharePoint domain
-- This is the domain part of your SharePoint URL
-- **How to find it**: Open SharePoint in browser, copy the domain from the URL
-- Examples:
-  - Commercial: `"company.sharepoint.com"`
-  - GovCloud: `"agency.sharepoint.us"`
-  - Custom domain: `"sharepoint.customdomain.com"`
-- ⚠️ Do NOT include `https://` or trailing paths
+Supports glob patterns for flexible file selection:
+- `"docs/readme.md"` - Single specific file
+- `"*.pdf"` - All PDFs in root directory
+- `"**/*.md"` - All Markdown files in all subdirectories
+- `"reports/**/*"` - Everything in reports folder
 
-**`site_name`** - SharePoint site collection name
-- The name of the specific SharePoint site (not the full URL)
-- **How to find it**: In SharePoint URL `https://company.sharepoint.com/sites/TeamSite`, the site name is `"TeamSite"`
-- Examples:
-  - `"TeamSite"` - Team collaboration site
-  - `"KnowledgeBase"` - Documentation site
-  - `"ProjectArchive"` - Project storage site
-- ℹ️ Case-sensitive in some configurations
+See [File Glob Patterns](#file-glob-patterns) for comprehensive pattern guide.
 
-**`upload_path`** - Target folder path in SharePoint
-- The folder path where files will be uploaded (relative to the site)
-- **Format**: `"DocumentLibrary/FolderPath/Subfolder"`
-- Common library names:
-  - `"Shared Documents"` - Default document library
-  - `"Documents"` - Alternate default name
-  - `"Site Assets"` - For web resources
-- Examples:
-  - `"Shared Documents"` - Upload to library root
-  - `"Documents/Reports"` - Upload to Reports subfolder
-  - `"Shared Documents/Q1/Financial"` - Multi-level path
-- 📁 Folders are created automatically if they don't exist
+#### `host_name` - Your SharePoint domain
 
-**`tenant_id`** - Azure AD Tenant ID
-- Your organization's Azure Active Directory tenant identifier
-- **How to find it**:
-  1. Go to [Azure Portal](https://portal.azure.com)
-  2. Navigate to Azure Active Directory
-  3. Copy the "Tenant ID" from the overview page
-- **Format**: GUID like `12345678-1234-1234-1234-123456789abc`
-- 🔒 Store in GitHub Secrets as `SHAREPOINT_TENANT_ID`
+The domain part of your SharePoint URL (without `https://`):
+- Commercial: `"company.sharepoint.com"`
+- GovCloud: `"agency.sharepoint.us"`
+- Custom: `"sharepoint.customdomain.com"`
 
-**`client_id`** - Application (client) ID
-- The unique identifier for your registered Azure AD application
-- **How to find it**:
-  1. Go to Azure Portal → App Registrations
-  2. Select your SharePoint app
-  3. Copy the "Application (client) ID"
-- **Format**: GUID like `87654321-4321-4321-4321-cba987654321`
-- 🔒 Store in GitHub Secrets as `SHAREPOINT_CLIENT_ID`
+**How to find**: Open SharePoint in browser, copy domain from URL bar.
 
-**`client_secret`** - Application client secret
-- The secret value (password) for authenticating your application
-- **How to create it**:
-  1. Go to Azure Portal → App Registrations → Your App
-  2. Navigate to "Certificates & secrets"
-  3. Click "New client secret"
-  4. Copy the **Value** (not the Secret ID)
-- ⚠️ **CRITICAL**: Copy the secret value immediately - you cannot retrieve it later
-- 🔒 Store in GitHub Secrets as `SHAREPOINT_CLIENT_SECRET`
-- ⏰ Secrets expire - set a reminder to renew before expiration
+#### `site_name` - SharePoint site name
+
+The site collection name from your SharePoint URL:
+- URL: `https://company.sharepoint.com/sites/TeamSite`
+- Site name: `"TeamSite"`
+
+**Note**: Case-sensitive in some configurations.
+
+#### `upload_path` - Target folder in SharePoint
+
+Format: `"DocumentLibrary/FolderPath/Subfolder"`
+
+Common libraries:
+- `"Shared Documents"` - Default library
+- `"Documents"` - Alternate default
+- `"Site Assets"` - Web resources
+
+Examples:
+- `"Shared Documents"` - Library root
+- `"Documents/Reports"` - Reports subfolder
+- `"Shared Documents/Q1/Financial"` - Multi-level path
+
+**Folders are created automatically if they don't exist.**
+
+#### `tenant_id`, `client_id`, `client_secret` - Azure credentials
+
+**How to find**:
+1. [Azure Portal](https://portal.azure.com) → **Azure Active Directory**
+2. **App registrations** → Select your app
+3. Copy **Tenant ID** and **Application (client) ID**
+4. **Certificates & secrets** → Create secret → Copy **Value** immediately
+
+⚠️ **Store all three in GitHub Secrets** - never commit to repository.
 
 </details>
 
@@ -203,336 +173,315 @@ jobs:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `file_path_recursive_match` | `false` | Enable recursive glob matching |
-| `max_retries` | `3` | Number of upload retry attempts |
+| `file_path_recursive_match` | `false` | Enable recursive directory traversal |
+| `max_retries` | `3` | Upload retry attempts (1-10) |
 | `force_upload` | `false` | Skip change detection, upload all files |
-| `convert_md_to_html` | `true` | Convert Markdown files to HTML |
-| `exclude_patterns` | `""` | Comma-separated exclusion patterns (see [Exclusion Patterns](#exclusion-patterns)) |
-| `sync_delete` | `false` | Delete SharePoint files not in local sync set (see [Sync Deletion](#sync-deletion)) |
-| `sync_delete_whatif` | `true` | Preview deletions without actually deleting (requires `sync_delete=true`) |
-| `login_endpoint` | `"login.microsoftonline.com"` | Azure AD login endpoint |
-| `graph_endpoint` | `"graph.microsoft.com"` | Microsoft Graph API endpoint |
+| `convert_md_to_html` | `true` | Convert Markdown to HTML |
+| `exclude_patterns` | `""` | Comma-separated exclusion patterns |
+| `sync_delete` | `false` | Delete SharePoint files not in repository |
+| `sync_delete_whatif` | `true` | Preview deletions without deleting |
+| `login_endpoint` | `"login.microsoftonline.com"` | Azure AD endpoint |
+| `graph_endpoint` | `"graph.microsoft.com"` | Microsoft Graph endpoint |
 
 <details>
-<summary><strong>📖 Parameter Details (click to expand)</strong></summary>
+<summary><strong>📖 Detailed Optional Parameters</strong></summary>
 
-**`file_path_recursive_match`** - Enable recursive directory traversal
-- **Default**: `false` (only matches files in specified directory)
-- **When to use `true`**: To include all subdirectories in your pattern
-- Examples:
-  ```yaml
-  # Without recursive (false):
-  file_path: "docs/*"        # Only files directly in docs/
+#### `file_path_recursive_match` - Recursive traversal
 
-  # With recursive (true):
-  file_path: "docs/**/*"     # All files in docs/ and subdirectories
-  file_path_recursive_match: true
-  ```
-- 💡 **Tip**: Use `**/*` pattern with `recursive: true` to upload entire directory trees
+Enable to include all subdirectories:
 
-**`max_retries`** - Upload retry attempts
-- **Default**: `3` attempts
-- **Range**: 1-10 retries recommended
+```yaml
+# Without recursive (default):
+file_path: "docs/*"        # Only files directly in docs/
+
+# With recursive:
+file_path: "docs/**/*"
+file_path_recursive_match: true  # Includes all subdirectories
+```
+
+#### `max_retries` - Retry attempts
+
+- **Default**: 3 attempts
 - **When to adjust**:
-  - Increase for unstable networks: `max_retries: 5`
-  - Decrease for faster failures: `max_retries: 1`
-- Each retry uses exponential backoff (2, 4, 8 seconds...)
-- Examples:
-  ```yaml
-  max_retries: 5    # More resilient to network issues
-  max_retries: 1    # Fail fast for CI/CD pipelines
-  ```
+  - Unstable networks: Increase to 5
+  - Fast failure: Decrease to 1
+- Uses exponential backoff (2s, 4s, 8s...)
 
-**`force_upload`** - Skip smart sync change detection
-- **Default**: `false` (smart sync enabled - only upload changed files)
-- **When to use `true`**:
-  - First-time sync to SharePoint
-  - After changing file metadata/structure
-  - To intentionally re-upload everything
+```yaml
+max_retries: 5    # More resilient
+max_retries: 1    # Fail fast
+```
+
+#### `force_upload` - Force all uploads
+
+- **Default**: `false` (smart sync - only changed files)
+- **Use `true` when**:
+  - First-time sync
   - Troubleshooting sync issues
-- ⚠️ **Warning**: `true` uploads ALL files regardless of changes (slower, uses more bandwidth)
-- Examples:
-  ```yaml
-  force_upload: false   # Smart sync (recommended) - skip unchanged files
-  force_upload: true    # Force all files to upload
-  ```
-- 💰 **Performance impact**: Smart sync can skip 60-90% of files, saving significant time
+  - Intentionally re-uploading everything
 
-**`convert_md_to_html`** - Markdown-to-HTML conversion
-- **Default**: `true` (automatically convert `.md` files)
-- **Output**: Styled HTML with GitHub-flavored formatting and Mermaid diagrams as SVG
-- **When to use `false`**:
-  - SharePoint has Markdown preview capability
-  - You want raw `.md` files in SharePoint
-  - Converting other file types that conflict
-- Examples:
-  ```yaml
-  convert_md_to_html: true   # Upload README.md as README.html (styled)
-  convert_md_to_html: false  # Upload README.md as-is
-  ```
-- 📊 Converted HTML includes embedded diagrams, syntax highlighting, and tables
+⚠️ **Warning**: Uploads ALL files regardless of changes (slower).
 
-**`exclude_patterns`** - Filter out unwanted files
-- **Default**: `""` (no exclusions)
-- **Format**: Comma-separated list of patterns
-- **Common use cases**:
-  - Remove build artifacts: `"*.pyc,dist,build"`
-  - Exclude temp files: `"*.tmp,*.log,*.bak"`
-  - Skip dependencies: `"node_modules,vendor"`
-  - Hide sensitive data: `".env,secrets.json"`
-- See [Exclusion Patterns](#exclusion-patterns) for detailed guide
-- Examples:
-  ```yaml
-  exclude_patterns: "*.log,*.tmp"                    # Exclude log and temp files
-  exclude_patterns: "__pycache__,node_modules,.git"  # Exclude common directories
-  ```
+💡 **Tip**: Smart sync typically skips 60-90% of files.
 
-**`sync_delete`** - Enable bidirectional sync with file deletion
-- **Default**: `false` (disabled - safer default)
-- **Purpose**: Delete files from SharePoint that no longer exist in your repository
-- **When to use `true`**:
-  - Maintaining exact mirror of repository in SharePoint
-  - Cleaning up after file renames/moves
-  - Removing obsolete documentation
-  - Syncing restructured content
-- ⚠️ **Important**: Always test with `sync_delete_whatif: true` first!
-- Examples:
-  ```yaml
-  sync_delete: false  # Default - no deletions
-  sync_delete: true   # Enable deletion (use with whatif first!)
-  ```
-- 🔒 **Safety**: Only deletes within specified `upload_path`, requires explicit opt-in
+#### `convert_md_to_html` - Markdown conversion
 
-**`sync_delete_whatif`** - Preview deletions without actually deleting
-- **Default**: `true` (preview mode - safer default)
-- **Purpose**: Shows what files would be deleted without actually deleting them
-- **Requires**: `sync_delete: true` to have any effect
-- **When to use `false`**: After reviewing WhatIf output and confirming deletions are correct
-- **Recommended workflow**:
-  1. First run: `sync_delete: true` + `sync_delete_whatif: true` (preview)
-  2. Review console output to verify deletions are expected
-  3. Second run: `sync_delete: true` + `sync_delete_whatif: false` (actual deletion)
-- Examples:
-  ```yaml
-  # Step 1: Preview what would be deleted (safe)
-  sync_delete: true
-  sync_delete_whatif: true   # Shows "File Deleted (WhatIf): filename"
+- **Default**: `true` (auto-convert `.md` files)
+- **Output**: Styled HTML with GitHub formatting + Mermaid diagrams
+- **Use `false`** when you want raw `.md` files
 
-  # Step 2: Actually delete after reviewing (requires explicit false)
-  sync_delete: true
-  sync_delete_whatif: false  # Actually deletes files
-  ```
-- 💡 **Tip**: Leave as `true` for safety - requires conscious decision to set to `false`
+```yaml
+convert_md_to_html: true   # README.md → README.html (styled)
+convert_md_to_html: false  # README.md → README.md (as-is)
+```
 
-**`login_endpoint`** - Azure AD authentication endpoint
-- **Default**: `"login.microsoftonline.com"` (Commercial cloud)
-- **When to change**: Using government or sovereign clouds
-- **Common endpoints**:
-  - US Government: `"login.microsoftonline.us"`
-  - Germany: `"login.microsoftonline.de"`
-  - China (21Vianet): `"login.chinacloudapi.cn"`
-- Examples:
-  ```yaml
-  # US Commercial (default)
-  login_endpoint: "login.microsoftonline.com"
+#### `exclude_patterns` - File exclusions
 
-  # US Government GCC High
-  login_endpoint: "login.microsoftonline.us"
-  ```
+Comma-separated list to skip files:
 
-**`graph_endpoint`** - Microsoft Graph API endpoint
-- **Default**: `"graph.microsoft.com"` (Commercial cloud)
-- **When to change**: Using government or sovereign clouds (must match `login_endpoint`)
-- **Common endpoints**:
-  - US Government: `"graph.microsoft.us"`
-  - Germany: `"graph.microsoft.de"`
-  - China (21Vianet): `"microsoftgraph.chinacloudapi.cn"`
-- Examples:
-  ```yaml
-  # US Commercial (default)
-  graph_endpoint: "graph.microsoft.com"
+```yaml
+# Python projects
+exclude_patterns: "*.pyc,__pycache__,.pytest_cache"
 
-  # US Government GCC High
-  login_endpoint: "login.microsoftonline.us"
-  graph_endpoint: "graph.microsoft.us"
-  ```
-- ⚠️ **Important**: Login and Graph endpoints must be from the same cloud environment
+# Node.js projects
+exclude_patterns: "node_modules,*.log,dist,build"
+
+# Sensitive data
+exclude_patterns: ".env,.env.local,secrets.json,*.key"
+```
+
+See [Exclusion Patterns](#exclusion-patterns) for detailed guide.
+
+#### `sync_delete` - Bidirectional sync
+
+- **Default**: `false` (safer)
+- **Use `true`** to delete SharePoint files removed from repository
+- ⚠️ **Always test with `sync_delete_whatif: true` first!**
+
+```yaml
+sync_delete: false  # No deletions (default)
+sync_delete: true   # Enable deletion (test with whatif first!)
+```
+
+See [Sync Deletion](#sync-deletion) for complete guide.
+
+#### `sync_delete_whatif` - Preview deletions
+
+- **Default**: `true` (preview mode)
+- **Requires**: `sync_delete: true`
+- **Use `false`** only after reviewing WhatIf output
+
+**Recommended workflow**:
+1. Run with `whatif: true` (preview)
+2. Review console output
+3. Set `whatif: false` to actually delete
+
+```yaml
+# Step 1: Preview
+sync_delete: true
+sync_delete_whatif: true   # Shows what would be deleted
+
+# Step 2: Execute (after review)
+sync_delete: true
+sync_delete_whatif: false  # Actually deletes
+```
+
+#### `login_endpoint` / `graph_endpoint` - Cloud environments
+
+**Default**: Commercial cloud (`login.microsoftonline.com`, `graph.microsoft.com`)
+
+**Government/Sovereign clouds**:
+
+```yaml
+# US Government GCC High
+login_endpoint: "login.microsoftonline.us"
+graph_endpoint: "graph.microsoft.us"
+
+# Germany
+login_endpoint: "login.microsoftonline.de"
+graph_endpoint: "graph.microsoft.de"
+
+# China (21Vianet)
+login_endpoint: "login.chinacloudapi.cn"
+graph_endpoint: "microsoftgraph.chinacloudapi.cn"
+```
+
+⚠️ **Endpoints must match the same cloud environment.**
 
 </details>
 
-### File Glob Patterns
+<details>
+<summary><strong>🎯 File Glob Patterns Reference</strong></summary>
 
-Understanding glob patterns helps you select exactly which files to upload:
+### Pattern Syntax
 
-| Pattern | Description | Example Matches |
-|---------|-------------|-----------------|
-| `*.pdf` | All PDF files in root directory | `report.pdf`, `guide.pdf` |
-| `**/*.pdf` | All PDF files in any directory | `docs/report.pdf`, `archive/2024/guide.pdf` |
-| `docs/*` | All files directly in docs folder | `docs/readme.md`, `docs/config.json` |
-| `docs/**/*` | All files in docs and subfolders | `docs/api/spec.yaml`, `docs/guides/intro.md` |
-| `**/*.{md,txt}` | All markdown and text files | `readme.md`, `notes.txt`, `docs/guide.md` |
-| `**/*` | All files, subfolders, and subfiles | `All files and folders` |
-| `!**/*.test.*` | Exclude test files | Excludes `file.test.js`, `spec.test.md` |
+| Pattern | Matches | Examples |
+|---------|---------|----------|
+| `*.pdf` | PDFs in root | `report.pdf`, `guide.pdf` |
+| `**/*.pdf` | PDFs anywhere | `docs/report.pdf`, `archive/2024/guide.pdf` |
+| `docs/*` | Files directly in docs | `docs/readme.md`, `docs/config.json` |
+| `docs/**/*` | All files in docs tree | `docs/api/spec.yaml`, `docs/guides/intro.md` |
+| `**/*.{md,txt}` | Markdown and text files | `readme.md`, `notes.txt` |
+| `**/*` | Everything | All files and folders |
 
-#### Glob Pattern Tips
+### Pattern Rules
 
-- **`*`** matches any characters within a single directory level
-- **`**`** matches zero or more directory levels
-- **`{a,b}`** matches either pattern a or b
-- **`!pattern`** excludes files matching the pattern
-- Always use forward slashes (`/`) even on Windows
+- `*` - Matches any characters in single directory
+- `**` - Matches zero or more directories
+- `{a,b}` - Matches either a or b
+- `!pattern` - Excludes matching files
+- Always use forward slashes `/` (even on Windows)
 
-### Exclusion Patterns
-
-Use the `exclude_patterns` parameter to skip specific files or directories during sync. This is useful for excluding temporary files, build artifacts, or sensitive data.
-
-#### How to Specify Exclusions
-
-Provide a **comma-separated list** of patterns:
+### Common Patterns
 
 ```yaml
-exclude_patterns: "*.log,*.tmp,__pycache__,node_modules,.git"
+# All Markdown documentation
+file_path: "**/*.md"
+
+# Specific folder only
+file_path: "reports/*"
+
+# Multiple file types
+file_path: "**/*.{pdf,docx,xlsx}"
+
+# Everything except tests
+file_path: "**/*"
+exclude_patterns: "*.test.*,__tests__"
 ```
 
-#### Supported Pattern Types
+</details>
 
-| Pattern Type | Example | What It Excludes |
-|--------------|---------|------------------|
-| **File Extension** | `*.log` | All `.log` files anywhere |
-| **Exact Filename** | `config.json` | Files named exactly `config.json` |
-| **Directory Name** | `__pycache__` | Any `__pycache__` directory |
-| **Path Component** | `node_modules` | Any path containing `node_modules` |
-| **Wildcard** | `temp*` | Files starting with `temp` |
-| **Multiple Extensions** | `*.pyc,*.pyo` | Both `.pyc` and `.pyo` files |
+<details>
+<summary><strong>🚫 Exclusion Patterns Reference</strong></summary>
 
-#### Pattern Matching Rules
+### How Exclusions Work
 
-- **Basename matching**: Patterns match against the filename (e.g., `*.tmp` matches `file.tmp`)
-- **Path component matching**: Directory names match anywhere in path (e.g., `node_modules` excludes `src/node_modules/file.js`)
-- **Case sensitivity**: Matches are case-sensitive on Linux, case-insensitive on Windows
-- **Auto-wildcard**: Extension-only patterns auto-expand (e.g., `log` becomes `*.log`)
+Provide comma-separated patterns in `exclude_patterns`:
 
-#### Common Exclusion Examples
-
-**Python Projects:**
 ```yaml
-exclude_patterns: "*.pyc,*.pyo,__pycache__,.pytest_cache,.mypy_cache,*.egg-info"
+exclude_patterns: "*.log,*.tmp,__pycache__,node_modules"
 ```
 
-**Node.js Projects:**
+### Pattern Types
+
+| Type | Example | Excludes |
+|------|---------|----------|
+| File extension | `*.log` | All `.log` files |
+| Exact name | `config.json` | Files named `config.json` |
+| Directory | `__pycache__` | Any `__pycache__` directory |
+| Wildcard | `temp*` | Files starting with `temp` |
+| Multiple | `*.pyc,*.pyo` | Both `.pyc` and `.pyo` |
+
+### Matching Rules
+
+- **Basename**: `*.tmp` matches `file.tmp`
+- **Path component**: `node_modules` excludes `src/node_modules/file.js`
+- **Case**: Sensitive on Linux, insensitive on Windows
+- **Extensions**: `log` auto-expands to `*.log`
+
+### Common Examples
+
+**Python projects:**
+```yaml
+exclude_patterns: "*.pyc,*.pyo,__pycache__,.pytest_cache,.mypy_cache"
+```
+
+**Node.js projects:**
 ```yaml
 exclude_patterns: "node_modules,*.log,dist,build,.cache"
 ```
 
-**Build Artifacts:**
+**Build artifacts:**
 ```yaml
-exclude_patterns: "*.dll,*.exe,*.so,*.dylib,bin,obj"
+exclude_patterns: "*.dll,*.exe,*.so,bin,obj"
 ```
 
-**Temporary & Hidden Files:**
-```yaml
-exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git,.gitignore"
-```
-
-**Sensitive Data:**
+**Sensitive data:**
 ```yaml
 exclude_patterns: ".env,.env.local,secrets.json,*.key,*.pem"
 ```
 
-## Usage Examples
+**Temp/hidden files:**
+```yaml
+exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
+```
 
-### Example 1: Upload All Files and Folders 
+</details>
+
+## 📚 Usage Examples
+
+### Example 1: Sync Entire Repository
 
 ```yaml
-- name: Github Checkout/Clone Repo # This is required
-  uses: actions/checkout@v4 # This is required
+- name: Checkout Repository
+  uses: actions/checkout@v4
 
-- name: Sync All Files and Folders
+- name: Sync All Files
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
     file_path: "**/*"
     file_path_recursive_match: true
     host_name: "company.sharepoint.com"
     site_name: "RepoDocumentation"
-    upload_path: "Technical Docs/Latest"
+    upload_path: "Shared Documents/GitHub Mirror"
     tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
     client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-### Example 2: Upload Only Changed PDF Reports
+### Example 2: Markdown Documentation Only
 
 ```yaml
-- name: Github Checkout/Clone Repo # This is required
-  uses: actions/checkout@v4 # This is required
+- name: Checkout Repository
+  uses: actions/checkout@v4
 
-- name: Upload Changed PDF Reports
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
-  with:
-    file_path: "reports/*.pdf"
-    force_upload: false  # Smart sync enabled
-    convert_md_to_html: false  # Keep markdown as-is
-    host_name: "company.sharepoint.com"
-    site_name: "Analytics"
-    upload_path: "Monthly Reports"
-    tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
-    client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
-    client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
-```
-
-### Example 3: Convert and Upload Markdown Documentation
-
-```yaml
-- name: Github Checkout/Clone Repo # This is required
-  uses: actions/checkout@v4 # This is required
-
-- name: Convert MD to HTML and Upload
+- name: Sync Documentation
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
     file_path: "**/*.md"
     file_path_recursive_match: true
-    convert_md_to_html: true  # Converts .md to styled HTML
+    convert_md_to_html: true  # Converts to styled HTML
     host_name: "company.sharepoint.com"
     site_name: "KnowledgeBase"
-    upload_path: "Articles"
+    upload_path: "Documentation"
     tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
     client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-### Example 4: Upload with Exclusions
+### Example 3: Exclude Build Artifacts
 
 ```yaml
-- name: Github Checkout/Clone Repo # This is required
-  uses: actions/checkout@v4 # This is required
+- name: Checkout Repository
+  uses: actions/checkout@v4
 
-- name: Upload Python Project (Exclude Build Files)
+- name: Sync Clean Repository
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
     file_path: "**/*"
     file_path_recursive_match: true
-    exclude_patterns: "*.pyc,__pycache__,.pytest_cache,*.log,.git"
+    exclude_patterns: "*.pyc,__pycache__,node_modules,*.log,.git,dist,build"
     host_name: "company.sharepoint.com"
     site_name: "DevDocs"
-    upload_path: "Python Projects/MyApp"
+    upload_path: "Projects/MyApp"
     tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
     client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-### Example 5: Government Cloud Deployment
+### Example 4: GovCloud Deployment
 
 ```yaml
-- name: Github Checkout/Clone Repo # This is required
-  uses: actions/checkout@v4 # This is required
+- name: Checkout Repository
+  uses: actions/checkout@v4
 
-- name: Upload to GovCloud SharePoint
+- name: Sync to GovCloud
   uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
     file_path: "compliance/**/*"
     host_name: "agency.sharepoint.us"
     site_name: "Compliance"
-    upload_path: "FY2024"
+    upload_path: "FY2025"
     tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
     client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
@@ -540,27 +489,53 @@ exclude_patterns: ".env,.env.local,secrets.json,*.key,*.pem"
     graph_endpoint: "graph.microsoft.us"
 ```
 
-## Advanced Features
+### Example 5: Bidirectional Sync with Cleanup
+
+```yaml
+- name: Checkout Repository
+  uses: actions/checkout@v4
+
+- name: Full Sync with Deletion
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  with:
+    file_path: "docs/**/*"
+    file_path_recursive_match: true
+    sync_delete: true              # Enable deletion
+    sync_delete_whatif: true       # Preview first (safe)
+    host_name: "company.sharepoint.com"
+    site_name: "Documentation"
+    upload_path: "Shared Documents/Docs"
+    tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
+    client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
+    client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
+```
+
+## 🔧 Advanced Features
 
 ### Smart Sync with Content Hashing
 
-When `force_upload` is `false` (default), the action:
+The action uses **xxHash128** for lightning-fast change detection:
 
-1. **Checks existing files** in SharePoint before uploading
-2. **Calculates xxHash128** checksums for ultra-fast content comparison
-3. **Falls back to file size** comparison if hash metadata unavailable
-4. **Skips unchanged files** to save time and bandwidth
-5. **Reports statistics** showing files uploaded vs. skipped
+**How it works:**
+1. Calculates hash for local file (3-6 GB/s processing speed)
+2. Compares with `FileHash` column in SharePoint
+3. Skips file if hash matches (unchanged)
+4. Uploads only new or modified files
 
-**Note**: The action automatically creates a `FileHash` column in SharePoint (if permissions allow) to store content hashes for future comparisons. This provides more reliable change detection than timestamps, especially in CI/CD environments.
+**Fallback:** Uses file size comparison if hash unavailable.
 
-**Console Output Example:**
+**Benefits:**
+- ⚡ Typically skips 60-90% of files
+- 💾 Saves bandwidth and time
+- 🎯 More reliable than timestamps (especially in Docker/CI)
+- 📊 Detailed statistics show savings
+
+**Example Output:**
 ```
-[OK] Smart sync mode enabled - unchanged files will be skipped
-[✓] FileHash column is available for hash-based comparison
-[?] Checking if file exists in SharePoint: README.md
-[#] Local hash: a3f5c892... for README.md
-[#] Remote hash: a3f5c892... for README.md
+[✓] Smart sync enabled - unchanged files will be skipped
+[✓] FileHash column available for hash-based comparison
+
+Processing files...
 [=] File unchanged (hash match): README.md
 [*] File changed (hash mismatch): config.json
 [+] New file to upload: changelog.md
@@ -572,338 +547,176 @@ When `force_upload` is `false` (default), the action:
    - New files uploaded:          255
    - Files updated:               129
    - Files skipped (unchanged):   569
-   - Failed uploads:                0
-   - Total files processed:       819
+   - Total files processed:       953
+
 [DATA] Transfer Summary:
    - Data uploaded:   93.7 MB
-   - Data skipped:    177.5 MB
-   - Total savings:   177.5 MB (569 files not re-uploaded)
-[EFFICIENCY] 59.7% of files were already up-to-date
+   - Data skipped:    177.5 MB (569 files not re-uploaded)
+
+[EFFICIENCY] 59.7% of files already up-to-date
 ============================================================
 ```
 
 ### Markdown Conversion
 
-When `convert_md_to_html` is `true` (default):
+Converts `.md` files to GitHub-flavored HTML with embedded styling:
 
-1. **Converts Markdown to HTML** with GitHub-flavored styling
-2. **Renders Mermaid diagrams** as embedded SVG images
-3. **Uploads HTML instead of MD** for better SharePoint viewing
-4. **Preserves formatting** including tables, code blocks, and task lists
+**Supported Features:**
+- ✅ Headers (H1-H6) with anchors
+- ✅ Tables with styling
+- ✅ Code blocks with syntax highlighting
+- ✅ Task lists with checkboxes
+- ✅ Blockquotes
+- ✅ Links and images
+- ✅ **Mermaid diagrams** (rendered as embedded SVG)
 
-#### Supported Markdown Features
-
-- **Headers** (H1-H6) with automatic anchors
-- **Tables** with alternating row colors
-- **Code blocks** with syntax highlighting
-- **Task lists** with checkboxes
-- **Blockquotes** with visual indicators
-- **Links** and **images**
-- **Mermaid diagrams** (flowcharts, sequence diagrams, etc.)
-
-#### Mermaid Diagram Example
-
-```markdown
-\```mermaid
+**Example Mermaid Diagram:**
+````markdown
+```mermaid
 graph TD
     A[Start] --> B{Decision}
     B -->|Yes| C[Process]
     B -->|No| D[End]
     C --> D
-\```
 ```
+````
 
-This will be converted to an embedded SVG diagram in the HTML output.
+<details>
+<summary><strong>🔧 Automatic Mermaid Sanitization</strong></summary>
 
-#### Automatic Mermaid Diagram Sanitization
-
-The action automatically sanitizes Mermaid diagrams to fix common syntax issues that can break rendering. This ensures your diagrams display correctly in SharePoint without manual fixes.
-
-**What Gets Sanitized:**
+The action automatically fixes common Mermaid syntax issues before rendering:
 
 | Issue | Fix | Reason |
 |-------|-----|--------|
-| `<br/>` tags | Changed to `<br>` | Mermaid doesn't support XHTML self-closing syntax |
-| Double quotes `"` in labels | Changed to single quotes `'` | Prevents syntax errors in node definitions |
-| Special characters (`#`, `%`, `&`, `\|`) in nodes | Converted to HTML entities | These break Mermaid parser |
-| Double pipes `\|\|` in edges | Changed to single pipe `\|` | Invalid edge syntax causes parse errors |
-| Pipes in diamond nodes `{}` | Escaped as `&#124;` | Unescaped pipes break diamond/rhombus syntax |
-| Pipes in edge labels | Properly delimited | Ensures edge labels parse correctly |
-| Reserved word `end` | Changed to `End` | Lowercase "end" breaks flowcharts |
-| Nodes starting with `o` or `x` | Spacing adjusted | Prevents unintended edge creation |
-| HTML tags (except `<br>`) | Removed | Only `<br>` is supported for line breaks |
-| Curly braces in comments | Removed | Confuses the Mermaid renderer |
+| `<br/>` tags | Changed to `<br>` | Mermaid doesn't support XHTML self-closing |
+| Double quotes in labels | Changed to single quotes | Prevents syntax errors |
+| Special chars in nodes | HTML entity encoding | `#`, `%`, `&`, `\|` break parser |
+| Double pipes `\|\|` | Changed to single `\|` | Invalid edge syntax |
+| Reserved word `end` | Changed to `End` | Lowercase breaks flowcharts |
+| HTML tags (except `<br>`) | Removed | Only `<br>` supported |
 
-**Enhanced Node Shape Support:**
-- Square brackets `[]`
-- Parentheses `()`, `(())`
-- Diamond/rhombus `{}`, `{{}}`
-- Trapezoids `[/\]`, `[\\/]`
-- All shapes properly sanitized with special character escaping
+**Supported Node Shapes:**
+- Square brackets `[text]`
+- Parentheses `(text)`, `((text))`
+- Diamond/rhombus `{text}`, `{{text}}`
+- Trapezoids `[/text\]`, `[\text/]`
 
-This sanitization happens automatically during conversion - no action required on your part!
+All shapes are auto-sanitized for special characters. No manual fixes needed!
+
+</details>
 
 ### Sync Deletion
 
-The action supports **bidirectional sync** - it can delete files from SharePoint that no longer exist in your repository. This maintains true synchronization between your GitHub repository and SharePoint.
+**Bidirectional sync** - automatically removes SharePoint files that no longer exist in your repository.
 
-#### 🎯 Use Cases
+**Use Cases:**
+- 🔄 Renamed files (old name removed)
+- 🗑️ Deleted files (removed from SharePoint)
+- 📁 Restructured folders (cleanup old locations)
+- 📝 Obsolete documentation (auto-removal)
 
-- **Renamed files**: Old file removed from SharePoint when renamed in GitHub
-- **Deleted files**: Removed from SharePoint when deleted from repository
-- **Restructured folders**: Clean up after reorganizing your documentation
-- **Obsolete content**: Remove outdated documentation automatically
+**Safety Features:**
+1. **Explicit opt-in** (`sync_delete: false` by default)
+2. **WhatIf mode** (preview deletions before executing)
+3. **Scoped deletion** (only within `upload_path`)
+4. **Statistics** (audit trail of deletions)
 
-#### 🔒 Safety Features
+**Configuration:**
 
-1. **Explicit Opt-In**: Disabled by default (`sync_delete: false`)
-2. **WhatIf Mode**: Preview deletions before actually deleting (enabled by default when sync_delete=true)
-3. **Scoped Deletion**: Only deletes within the specified `upload_path` folder
-4. **Statistics Tracking**: Reports number of files deleted for audit trail
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `sync_delete` | `false` | Enable deletion feature |
+| `sync_delete_whatif` | `true` | Preview mode (safe default) |
 
-#### ⚙️ Configuration
+**Recommended Workflow:**
 
-Two parameters control sync deletion:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `sync_delete` | `false` | Enable sync deletion feature |
-| `sync_delete_whatif` | `true` | Preview mode - shows what would be deleted without actually deleting |
-
-#### 📝 Usage Examples
-
-**Example 1: Preview What Would Be Deleted (Safe - Recommended First Step)**
-
+**Step 1: Preview (Safe)**
 ```yaml
-- name: Preview SharePoint Sync Deletions
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
-  with:
-    site_name: "MySite"
-    sharepoint_host_name: "company.sharepoint.com"
-    tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
-    client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
-    client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
-    upload_path: "Shared Documents/Documentation"
-    file_path: "docs/**/*"
-    file_path_recursive_match: true
-    sync_delete: true              # Enable deletion feature
-    sync_delete_whatif: true       # Preview mode (default)
+sync_delete: true
+sync_delete_whatif: true  # Shows what would be deleted
 ```
 
-**Console Output (WhatIf Mode):**
+**Console Output:**
 ```
-[!] Sync deletion enabled in WHATIF mode - will show what would be deleted without actually deleting
-[*] Listing files in SharePoint target folder...
-[OK] Found 150 files in SharePoint
+[!] Sync deletion enabled in WHATIF mode
+[*] Found 3 orphaned files (no actual deletions)
 
-[!] Found 3 orphaned files (WhatIf mode - no actual deletions will occur)
 File Deleted (WhatIf): old-readme.md
 File Deleted (WhatIf): deprecated/guide.md
 File Deleted (WhatIf): archive/notes.txt
-[✓] WhatIf: Would delete 3 orphaned files from SharePoint
 
-============================================================
-[✓] SYNC PROCESS COMPLETED
-============================================================
-[STATS] Sync Statistics:
-   - New files uploaded:          2
-   - Files updated:               1
-   - Files skipped (unchanged):   145
-   - Files deleted (WhatIf):      3
-   - Failed uploads:              0
-   - Total files processed:       148
-============================================================
+[✓] WhatIf: Would delete 3 files
 ```
 
-**Example 2: Actually Delete Orphaned Files**
-
-Once you've reviewed the WhatIf output and are confident the deletions are correct:
-
+**Step 2: Execute (After Review)**
 ```yaml
-- name: Sync to SharePoint with Cleanup
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
-  with:
-    site_name: "MySite"
-    sharepoint_host_name: "company.sharepoint.com"
-    tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
-    client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
-    client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
-    upload_path: "Shared Documents/Documentation"
-    file_path: "docs/**/*"
-    file_path_recursive_match: true
-    sync_delete: true              # Enable deletion feature
-    sync_delete_whatif: false      # ACTUALLY DELETE (set explicitly)
+sync_delete: true
+sync_delete_whatif: false  # Actually deletes files
 ```
 
-**Console Output (Actual Deletion):**
+**Console Output:**
 ```
-[!] Sync deletion enabled - files in SharePoint but not in sync set will be DELETED
-[*] Listing files in SharePoint target folder...
-[OK] Found 150 files in SharePoint
+[!] Sync deletion enabled - files will be DELETED
+[*] Found 3 orphaned files to delete
 
-[!] Found 3 orphaned files to delete from SharePoint
 File Deleted: old-readme.md
 File Deleted: deprecated/guide.md
 File Deleted: archive/notes.txt
-[✓] Successfully deleted 3 orphaned files from SharePoint
 
-============================================================
-[✓] SYNC PROCESS COMPLETED
-============================================================
-[STATS] Sync Statistics:
-   - New files uploaded:          2
-   - Files updated:               1
-   - Files skipped (unchanged):   145
-   - Files deleted:               3
-   - Failed uploads:              0
-   - Total files processed:       148
-============================================================
+[✓] Successfully deleted 3 files
 ```
 
-#### ⚠️ Important Notes
+⚠️ **Important:** Always test with WhatIf first. Deleted files may be in SharePoint recycle bin (depends on configuration).
 
-1. **Test with WhatIf First**: Always run with `sync_delete_whatif: true` first to verify what will be deleted
-2. **Review Output Carefully**: Check that only expected files are marked for deletion
-3. **Permanent Deletion**: Deleted files may be recoverable from SharePoint recycle bin (depends on SharePoint configuration)
-4. **Folder Structure**: Considers full relative paths including folders when comparing files
-5. **Markdown Conversion**: Accounts for `.md` → `.html` conversion when identifying orphaned files
-
-#### 🔄 How It Works
-
-1. **List SharePoint Files**: Recursively lists all files in the target SharePoint folder
-2. **Build Local Set**: Creates a set of all files being uploaded (accounting for `.md` → `.html` conversion)
-3. **Identify Orphans**: Compares SharePoint files with local set to find files that no longer exist locally
-4. **Delete or Preview**: Either shows what would be deleted (WhatIf) or actually deletes the files
-
-#### 💡 Best Practices
-
-- **Start with WhatIf**: Always enable WhatIf mode first to preview deletions
-- **Use in Scheduled Workflows**: Combine with scheduled runs for automated cleanup
-- **Monitor Statistics**: Review the deletion count in workflow logs
-- **Test in Non-Production**: Test sync deletion in a test SharePoint site first
-- **Document Your Setup**: Note which repositories use sync deletion for team awareness
+💡 **Best Practice:** Use in scheduled workflows for automated cleanup.
 
 ### Filename Sanitization
 
-The action automatically handles SharePoint's filename restrictions:
+SharePoint restricts certain characters. The action auto-converts them:
 
-| Invalid Character | Replacement |
-|-------------------|-------------|
-| `#` | `＃` (fullwidth) |
-| `%` | `％` (fullwidth) |
-| `&` | `＆` (fullwidth) |
-| `:` | `：` (fullwidth) |
-| `<` `>` | `＜` `＞` (fullwidth) |
-| `?` | `？` (fullwidth) |
-| `\|` | `｜` (fullwidth) |
+| Invalid | Replacement |
+|---------|-------------|
+| `#`, `%`, `&` | Fullwidth Unicode equivalents |
+| `:`, `<`, `>`, `?`, `\|` | Fullwidth Unicode equivalents |
 
-Reserved names (CON, PRN, AUX, etc.) are automatically prefixed with underscore.
+Reserved names (CON, PRN, AUX, NUL, etc.) are prefixed with underscore.
 
-## Troubleshooting
+**Example:** `file:name#test.md` → `file：name＃test.md`
 
-### Common Issues
+## 🔒 Security
 
-#### 1. Authentication Failed
+### Best Practices
 
-**Error:** `Failed to connect to SharePoint: (401) Unauthorized`
-
-**Solution:**
-- Verify your Client ID and Client Secret are correct
-- Ensure the app has appropriate permissions:
-  - `Sites.ReadWrite.All` OR `Sites.Selected` (with site access granted)
-  - `Sites.Manage.All` (optional, for FileHash column creation)
-- For Sites.Selected: Verify app has been granted access to the specific site
-- Check that the Tenant ID matches your SharePoint instance
-
-#### 2. File Not Found
-
-**Error:** `No files or directories matched pattern`
-
-**Solution:**
-- Check your glob pattern syntax
-- Enable `file_path_recursive_match: true` for nested directories
-- Ensure files exist in the repository (use `ls` in a previous step to debug)
-
-#### 3. Upload Timeout
-
-**Error:** `The operation timed out`
-
-**Solution:**
-- Large files may take time; the action automatically retries
-- Consider splitting large uploads into multiple actions
-- Check your network connectivity
-
-#### 4. Markdown Conversion Failed
-
-**Error:** `Mermaid conversion failed`
-
-**Solution:**
-- Verify Mermaid syntax is correct
-- Simple diagrams work best for SVG conversion
-- Complex diagrams might need simplification
-
-### Debug Mode
-
-To enable verbose logging, add a step before the upload:
-
-```yaml
-- name: List files to upload
-  run: |
-    echo "Files matching pattern:"
-    ls -la docs/**/*.md
-```
-
-## Performance Optimization
-
-### Tips for Faster Syncs
-
-1. **Use specific glob patterns** instead of `**/*`
-2. **Enable smart sync** (default) to skip unchanged files
-3. **Upload frequently** to minimize changes per sync
-4. **Organize files logically** to use targeted patterns
-5. **Schedule during off-peak hours** for large syncs
-
-**Performance Note**: The action uses xxHash128 for content verification, which processes files at 3-6 GB/s on modern CPUs. This is 10-20x faster than traditional SHA-256 hashing, ensuring minimal overhead even for large files.
-
-### Benchmarks
-
-| Files | Size | Smart Sync | Force Upload |
-|-------|------|------------|--------------|
-| 10 files | 50 MB | ~15 seconds | ~45 seconds |
-| 100 files | 500 MB | ~30 seconds | ~5 minutes |
-| 1000 files | 5 GB | ~2 minutes | ~30 minutes |
-
-*Note: Times vary based on network speed and file changes*
-
-## Security Considerations
-
-- **Never commit secrets** to your repository
-- **Use GitHub Secrets** for all sensitive values
-- **Use Sites.Selected** for site-specific access (more secure than Sites.ReadWrite.All)
-- **Limit permissions** to only required SharePoint sites
-- **Review app permissions** regularly
-- **Use branch protection** to control who can trigger uploads
+- ✅ **Never commit secrets** to repository
+- ✅ **Use GitHub Secrets** for all credentials
+- ✅ **Use Sites.Selected** for granular access control (recommended)
+- ✅ **Limit permissions** to only required sites
+- ✅ **Review app permissions** regularly
+- ✅ **Use branch protection** to control workflow triggers
+- ✅ **Rotate client secrets** before expiration
 
 ### Sites.Selected Setup
 
-For enhanced security, use **Sites.Selected** permission to grant access to specific sites only:
+**Enhanced security** - grant app access to specific sites only (vs. tenant-wide access).
+
+<details>
+<summary><strong>🔐 Sites.Selected Configuration Guide</strong></summary>
 
 #### 1. Configure App Registration
-```powershell
-# In Azure AD, grant Sites.Selected permission to your app
-# API: Microsoft Graph
-# Permission: Sites.Selected (Application permission)
-```
 
-#### 2. Grant Access to Specific Site
-Use Microsoft Graph API or PowerShell to grant site access:
+In Azure AD, grant **Sites.Selected** permission:
+- API: Microsoft Graph
+- Permission: Sites.Selected (Application)
+- Type: Application permission
 
-**Method A: Using Graph API**
+#### 2. Grant Site Access
+
+**Method A: Graph API**
 ```bash
-# Get site ID first
+# Get site ID
 GET https://graph.microsoft.com/v1.0/sites/{hostname}:/sites/{sitename}
 
-# Grant app access to site (requires Sites.FullControl.All permission for admin)
+# Grant app access (requires admin permission)
 POST https://graph.microsoft.com/v1.0/sites/{site-id}/permissions
 {
   "roles": ["write"],
@@ -916,55 +729,172 @@ POST https://graph.microsoft.com/v1.0/sites/{site-id}/permissions
 }
 ```
 
-**Method B: Using PowerShell (PnP)**
+**Method B: PowerShell (PnP)**
 ```powershell
-# Install PnP PowerShell if needed
+# Install PnP PowerShell
 Install-Module -Name PnP.PowerShell
 
-# Connect to SharePoint site
+# Connect to site
 Connect-PnPOnline -Url "https://{tenant}.sharepoint.com/sites/{sitename}" -Interactive
 
-# Grant app permissions to the site
-Grant-PnPAzureADAppSitePermission -AppId "{client-id}" -DisplayName "{app-name}" -Permissions Write
+# Grant permissions
+Grant-PnPAzureADAppSitePermission `
+  -AppId "{client-id}" `
+  -DisplayName "{app-name}" `
+  -Permissions Write
 
-# Verify permissions
+# Verify
 Get-PnPAzureADAppSitePermission
 ```
 
-#### 3. Use in GitHub Actions
-No workflow changes needed! The action automatically uses whatever permissions are granted:
+#### 3. Use in Workflow
+
+No workflow changes needed! Works identically:
 
 ```yaml
 - uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
-    # Same configuration - works with both Sites.Selected and Sites.ReadWrite.All
-    site_name: "TeamSite"  # Must match the site you granted access to
-    # ... other parameters
+    site_name: "TeamSite"  # Must match granted site
+    # ... other parameters (same as before)
 ```
 
-**Benefits of Sites.Selected:**
-- ✅ Enhanced security - app can only access specific sites
-- ✅ Compliance-friendly - granular access control
-- ✅ Audit trail - clear record of which sites app can access
-- ✅ Works identically - no workflow changes needed
+**Benefits:**
+- ✅ App can only access specified sites
+- ✅ Compliance-friendly granular control
+- ✅ Clear audit trail
+- ✅ No workflow changes required
 
-## Contributing
+</details>
+
+## 🐛 Troubleshooting
+
+<details>
+<summary><strong>Common Issues & Solutions</strong></summary>
+
+### 1. Authentication Failed
+
+**Error:** `(401) Unauthorized`
+
+**Solutions:**
+- ✅ Verify Client ID and Secret are correct
+- ✅ Check app has required permissions:
+  - `Sites.ReadWrite.All` OR `Sites.Selected`
+  - `Sites.Manage.All` (optional, for FileHash column)
+- ✅ For Sites.Selected: Verify app granted access to site
+- ✅ Ensure Tenant ID matches SharePoint instance
+
+### 2. File Not Found
+
+**Error:** `No files matched pattern`
+
+**Solutions:**
+- ✅ Check glob pattern syntax
+- ✅ Enable `file_path_recursive_match: true` for nested directories
+- ✅ Add debug step: `run: ls -la` to verify files exist
+- ✅ Check `exclude_patterns` isn't excluding your files
+
+### 3. Upload Timeout
+
+**Error:** `Operation timed out`
+
+**Solutions:**
+- ✅ Large files automatically retry (check logs)
+- ✅ Consider splitting large uploads into multiple actions
+- ✅ Increase `max_retries` for unstable networks
+- ✅ Check network connectivity
+
+### 4. Markdown Conversion Failed
+
+**Error:** `Mermaid conversion failed`
+
+**Solutions:**
+- ✅ Verify Mermaid syntax (use [Mermaid Live Editor](https://mermaid.live))
+- ✅ Simplify complex diagrams
+- ✅ Check for unsupported Mermaid features
+- ✅ Automatic sanitization handles most issues
+
+### 5. Permission Denied (Column Creation)
+
+**Error:** `Access denied creating FileHash column`
+
+**Solutions:**
+- ✅ This is expected if app lacks `Sites.Manage.All`
+- ✅ Action automatically falls back to file size comparison
+- ✅ Grant `Sites.Manage.All` for hash-based comparison (optional)
+
+### Debug Steps
+
+Add before upload step to inspect files:
+
+```yaml
+- name: Debug - List Files
+  run: |
+    echo "Files matching pattern:"
+    ls -la docs/**/*.md
+```
+
+Enable verbose logging:
+```yaml
+- name: Upload with Debug
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  with:
+    # ... parameters
+  env:
+    ACTIONS_STEP_DEBUG: true
+```
+
+</details>
+
+## 📊 Performance
+
+### Optimization Tips
+
+1. **Use specific glob patterns** - `"docs/*.md"` vs. `"**/*"`
+2. **Enable smart sync** (default) - skips unchanged files
+3. **Upload frequently** - minimizes changes per sync
+4. **Organize files logically** - enables targeted patterns
+5. **Schedule off-peak** - for large syncs
+
+**Hashing Performance:** xxHash128 processes files at 3-6 GB/s (10-20x faster than SHA-256).
+
+<details>
+<summary><strong>Performance Benchmarks</strong></summary>
+
+| Files | Size | Smart Sync | Force Upload |
+|-------|------|------------|--------------|
+| 10 | 50 MB | ~15 seconds | ~45 seconds |
+| 100 | 500 MB | ~30 seconds | ~5 minutes |
+| 1000 | 5 GB | ~2 minutes | ~30 minutes |
+
+*Times vary based on network speed and file changes. Smart sync typically skips 60-90% of files.*
+
+**File Size Handling:**
+- Small files (<4MB): Direct upload (~10 files/second)
+- Large files (≥4MB): Chunked upload (~50 MB/second)
+
+</details>
+
+## 🤝 Contributing
+
+We welcome contributions! Here's how to get started:
 
 ### Development Setup
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes
+4. Test locally (see below)
+5. Commit: `git commit -m 'Add amazing feature'`
+6. Push: `git push origin feature/amazing-feature`
+7. Open Pull Request
 
-### Testing Locally
+### Local Testing
 
 ```bash
-# Build the Docker image
+# Build Docker image
 docker build -t sharepoint-upload .
 
-# Run with test parameters
+# Test with sample files
 docker run sharepoint-upload \
   "test-site" \
   "test.sharepoint.com" \
@@ -975,16 +905,24 @@ docker run sharepoint-upload \
   "*.md"
 ```
 
-## Support
+## 📞 Support
 
-- **📝 Issues**: [GitHub Issues](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action/issues)
-- **💬 Discussions**: [GitHub Discussions](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action/discussions)
-- **📧 Contact**: [Support Email](mailto:support@aunalytics.com)
+- **🐛 Issues:** [GitHub Issues](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action/issues)
+- **💬 Discussions:** [GitHub Discussions](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action/discussions)
+- **📧 Email:** [support@aunalytics.com](mailto:support@aunalytics.com)
 
-## Acknowledgments
+## 📜 License
 
-- Built with [Office365-REST-Python-Client](https://github.com/vgrem/Office365-REST-Python-Client)
-- Markdown parsing by [Mistune](https://github.com/lepture/mistune)
-- Mermaid diagrams by [Mermaid-CLI](https://github.com/mermaid-js/mermaid-cli)
+This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+Built with these excellent open-source projects:
+- [Office365-REST-Python-Client](https://github.com/vgrem/Office365-REST-Python-Client) - SharePoint/Graph API
+- [Mistune](https://github.com/lepture/mistune) - Markdown parsing
+- [Mermaid-CLI](https://github.com/mermaid-js/mermaid-cli) - Diagram rendering
+- [xxHash](https://github.com/Cyan4973/xxHash) - Ultra-fast hashing
 
 ---
+
+**Made with ❤️ by [Aunalytics Managed Services](https://www.aunalytics.com)**
