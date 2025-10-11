@@ -22,8 +22,8 @@ ENV CHROME_BIN="/usr/bin/chromium-browser" \
 
 # Debug environment variables (can be overridden at runtime)
 # Set to "true" to enable verbose debug or metadata debugging
-ENV DEBUG_METADATA="false"
-ENV DEBUG="false"
+ENV DEBUG_METADATA="true"
+ENV DEBUG="true"
 
 # Install mermaid-cli globally with compatible puppeteer version
 RUN npm install -g @mermaid-js/mermaid-cli@11.4.2
