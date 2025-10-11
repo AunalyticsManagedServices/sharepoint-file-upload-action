@@ -44,9 +44,9 @@ class Config:
         self.max_retry = int(sys.argv[8]) if len(sys.argv) > 8 and sys.argv[8] else 3
         self.login_endpoint = sys.argv[9] if len(sys.argv) > 9 and sys.argv[9] else "login.microsoftonline.com"
         self.graph_endpoint = sys.argv[10] if len(sys.argv) > 10 and sys.argv[10] else "graph.microsoft.com"
-        self.recursive = (sys.argv[11] if len(sys.argv) > 11 else "False") == "True"
-        self.force_upload = (sys.argv[12] if len(sys.argv) > 12 else "False") == "True"
-        self.convert_md_to_html = (sys.argv[13] if len(sys.argv) > 13 else "True") == "True"
+        self.recursive = (sys.argv[11] if len(sys.argv) > 11 else "false").lower() == "true"
+        self.force_upload = (sys.argv[12] if len(sys.argv) > 12 else "false").lower() == "true"
+        self.convert_md_to_html = (sys.argv[13] if len(sys.argv) > 13 else "true").lower() == "true"
         self.exclude_patterns = sys.argv[14] if len(sys.argv) > 14 and sys.argv[14] else ""
 
         # Derived values

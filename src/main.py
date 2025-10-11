@@ -740,6 +740,11 @@ def main():
     if config.exclude_patterns_list:
         print(f"[=] Exclusion patterns enabled: {', '.join(config.exclude_patterns_list)}")
 
+    # Show file discovery details
+    print(f"[=] Current working directory: {os.getcwd()}")
+    print(f"[=] Searching for files matching pattern: {config.file_path}")
+    print(f"[=] Recursive search: {config.recursive}")
+
     # Discover files based on glob pattern and exclusions
     local_files, local_dirs = discover_files(
         config.file_path,
