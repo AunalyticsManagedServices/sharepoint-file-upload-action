@@ -145,7 +145,8 @@ def ensure_folder_exists(parent_drive, folder_path):
                 current_drive = created_folder
                 created_folders[current_path] = created_folder
                 if is_debug_enabled():
-                    print(f"[✓] Created folder: {current_path}")
+                    if is_debug_enabled():
+                        print(f"[✓] Created folder: {current_path}")
 
             except AttributeError:
                 # If create_folder method doesn't exist, try alternative approach
@@ -167,6 +168,7 @@ def ensure_folder_exists(parent_drive, folder_path):
                     current_drive = created_folder
                     created_folders[current_path] = created_folder
                     if is_debug_enabled():
+                        if is_debug_enabled():
                         print(f"[✓] Created folder: {current_path}")
 
                 except Exception as add_error:
@@ -222,15 +224,31 @@ def progress_status(offset, file_size):
         print(f"Uploaded {offset} bytes from {file_size} bytes ... {offset/file_size*100:.2f}%")
 
 
-def success_callback(remote_file, local_path, display_name=None):
-    """Display success message after file upload."""
+def success_callback(remote_file, local_path, display_name=None, is_update=False):
+    """
+    Display success message after file upload.
+
+    Args:
+        remote_file: The uploaded file object
+        local_path: Path to the local file
+        display_name: Display name for temp files
+        is_update: True if file was updated, False if newly processed
+    """
     # Use display_name if provided (for temp files), otherwise use local_path
-    file_display = display_name if display_name else local_path
+    file_display = display_name if display_name else os.path.basename(local_path)
+
+    # Always show simple status message
+    if is_update:
+        print(f"File Updated: {file_display}")
+    else:
+        print(f"File Processed: {file_display}")
+
+    # Show detailed URL only in DEBUG mode
     if is_debug_enabled():
-        print(f"[✓] File {file_display} has been uploaded to {remote_file.web_url}")
+        print(f"  → Uploaded to: {remote_file.web_url}")
 
 
-def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, timeout_secs):
+def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, timeout_secs, is_update=False):
     """
     Upload large files using resumable upload sessions.
 
@@ -240,6 +258,7 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
     :param chunk_size: Size of each chunk to upload
     :param max_chunk_retry: Maximum retries for each chunk
     :param timeout_secs: Total timeout in seconds
+    :param is_update: True if file is being updated, False if new
     """
     file_name = os.path.basename(local_path)
     # Sanitize the file name for SharePoint compatibility
@@ -248,15 +267,15 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
     # First, try the built-in upload_large_file method
     # This method handles the upload session creation properly
     try:
-        print(f"[] Using built-in upload method for large file: {sanitized_name}")
-        if sanitized_name != file_name:
-            if is_debug_enabled():
+        if is_debug_enabled():
+            print(f"[→] Using built-in upload method for large file: {sanitized_name}")
+            if sanitized_name != file_name:
                 print(f"    (Original name: {file_name})")
         with open(local_path, 'rb') as f:
             # Note: The built-in method might need the sanitized name set differently
             # We'll rely on the library to handle this correctly
             remote_file = drive.upload_large_file(f).execute_query()
-            success_callback(remote_file, local_path, display_name=sanitized_name)
+            success_callback(remote_file, local_path, display_name=sanitized_name, is_update=is_update)
             return
     except AttributeError:
         # Method doesn't exist, continue with manual session
@@ -302,7 +321,7 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
         qry = UploadSessionQuery(return_type, {"item": upload_props})
         drive.context.add_query(qry).after_query_execute(_start_upload)
         return_type.get().execute_query()
-        success_callback(return_type, local_path)
+        success_callback(return_type, local_path, is_update=is_update)
     except Exception as e:
         print(f"[!] Children.add() approach failed: {e}")
 
@@ -329,7 +348,7 @@ def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, 
 
             # Use regular upload as fallback
             remote_file = drive.upload_file(upload_path).execute_query()
-            success_callback(remote_file, local_path, display_name=sanitized_name)
+            success_callback(remote_file, local_path, display_name=sanitized_name, is_update=is_update)
 
             # Clean up temp file if created
             if temp_file_created and temp_path and os.path.exists(temp_path):
@@ -458,6 +477,7 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
     temp_file_created = False
     temp_path = None
     temp_dir_created = None
+    is_file_update = False  # Track if this is an update vs new file
 
     # First, check if the file needs updating (unless forced)
     if not force_upload:
@@ -473,6 +493,7 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
 
         # If file exists but needs update, delete it first
         if exists and needs_update:
+            is_file_update = True  # Mark as update
             if is_debug_enabled():
                 print(f"[×] Deleting outdated file to prepare for update...")
             try:
@@ -484,15 +505,15 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
             except Exception as e:
                 print(f"[!] Warning: Could not delete existing file: {e}")
 
-            print(f"[] Uploading updated file: {sanitized_name}")
-            if sanitized_name != file_name:
-                if is_debug_enabled():
+            if is_debug_enabled():
+                print(f"[→] Uploading updated file: {sanitized_name}")
+                if sanitized_name != file_name:
                     print(f"    (Original name: {file_name})")
         else:
             # New file
-            print(f"[] Uploading new file: {sanitized_name}")
-            if sanitized_name != file_name:
-                if is_debug_enabled():
+            if is_debug_enabled():
+                print(f"[→] Uploading new file: {sanitized_name}")
+                if sanitized_name != file_name:
                     print(f"    (Original name: {file_name})")
             upload_stats_dict['new_files'] += 1
     else:
@@ -505,10 +526,13 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
 
         file_was_deleted = check_and_delete_existing_file(drive, file_name)
         if file_was_deleted:
-            print(f"[] Force uploading replacement file: {sanitized_name}")
+            is_file_update = True  # Mark as update
+            if is_debug_enabled():
+                print(f"[→] Force uploading replacement file: {sanitized_name}")
             upload_stats_dict['replaced_files'] += 1
         else:
-            print(f"[] Force uploading new file: {sanitized_name}")
+            if is_debug_enabled():
+                print(f"[→] Force uploading new file: {sanitized_name}")
             upload_stats_dict['new_files'] += 1
 
     try:
@@ -553,7 +577,7 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
             remote_file = drive.upload_file(upload_path).execute_query()
             # Pass the desired name for display if it was provided
             display_name = desired_name if desired_name else os.path.basename(local_path)
-            success_callback(remote_file, local_path, display_name=display_name)
+            success_callback(remote_file, local_path, display_name=display_name, is_update=is_file_update)
         else:
             # resumable_upload handles sanitization internally
             # This is only used for very large files now
@@ -563,7 +587,8 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
                 file_size,
                 chunk_size,
                 max_chunk_retry=60,
-                timeout_secs=10*60)
+                timeout_secs=10*60,
+                is_update=is_file_update)
 
         # Clean up temporary file/directory if created
         if temp_file_created:
@@ -709,7 +734,8 @@ def upload_file_with_structure(root_drive, local_file_path, base_path, site_url,
         target_folder = root_drive
 
     # Upload the file to the target folder
-    print(f"[] Processing file: {local_file_path}")
+    if is_debug_enabled():
+        print(f"[→] Processing file: {local_file_path}")
     for i in range(max_retry):
         try:
             upload_file(

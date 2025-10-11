@@ -1222,3 +1222,108 @@ def create_graph_client(tenant_id, client_id, client_secret, login_endpoint, gra
         client.before_execute(rewrite_wrapper, False)
 
     return client
+
+
+def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
+    """
+    Recursively list all files in a SharePoint folder.
+
+    Args:
+        drive: Office365 Drive object representing the folder
+        folder_path (str): The original folder path being synced (for reference)
+        current_path (str): Current relative path within the folder structure
+
+    Returns:
+        list: List of dictionaries containing file information:
+            - name (str): File name
+            - path (str): Relative path from root folder
+            - id (str): SharePoint item ID
+            - size (int): File size in bytes
+            - drive_item: The DriveItem object for deletion
+
+    Note:
+        This function traverses the folder structure recursively to find all files
+        in the sync target folder and its subfolders.
+    """
+    files = []
+    debug_enabled = is_debug_enabled()
+
+    try:
+        # Get all children in the current folder
+        children = drive.children.get().select(["name", "file", "folder", "size", "id"]).execute_query()
+
+        for child in children:
+            # Build the relative path for this item
+            item_path = f"{current_path}/{child.name}" if current_path else child.name
+
+            # Check if this is a file
+            if hasattr(child, 'file') and child.file is not None:
+                file_info = {
+                    'name': child.name,
+                    'path': item_path,
+                    'id': child.id,
+                    'size': child.size if hasattr(child, 'size') else 0,
+                    'drive_item': child
+                }
+                files.append(file_info)
+
+                if debug_enabled:
+                    print(f"[=] Found file in SharePoint: {item_path} ({file_info['size']} bytes)")
+
+            # Check if this is a folder - recurse into it
+            elif hasattr(child, 'folder') and child.folder is not None:
+                if debug_enabled:
+                    print(f"[=] Entering subfolder: {item_path}")
+
+                # Recursively get files from this subfolder
+                subfolder_files = list_files_in_folder_recursive(child, folder_path, item_path)
+                files.extend(subfolder_files)
+
+    except Exception as e:
+        print(f"[!] Error listing files in folder '{current_path}': {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+
+    return files
+
+
+def delete_file_from_sharepoint(drive_item, file_path):
+    """
+    Delete a file from SharePoint.
+
+    Args:
+        drive_item: Office365 DriveItem object representing the file to delete
+        file_path (str): Relative path of the file (for logging)
+
+    Returns:
+        bool: True if deletion successful, False otherwise
+
+    Note:
+        This function uses the Office365 REST Python Client library to delete
+        the file. It provides detailed logging in debug mode.
+    """
+    debug_enabled = is_debug_enabled()
+
+    try:
+        if debug_enabled:
+            print(f"[×] Deleting file from SharePoint: {file_path}")
+
+        # Delete the file using the DriveItem's delete method
+        drive_item.delete_object().execute_query()
+
+        # Always show simple deletion message
+        print(f"File Deleted: {file_path}")
+
+        # Show detailed message only in DEBUG mode
+        if debug_enabled:
+            print(f"  → Deletion confirmed")
+
+        return True
+
+    except Exception as e:
+        print(f"[!] Failed to delete file '{file_path}': {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return False

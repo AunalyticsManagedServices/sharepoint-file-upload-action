@@ -167,6 +167,7 @@ class UploadStatistics:
             'replaced_files': 0,
             'skipped_files': 0,
             'failed_files': 0,
+            'deleted_files': 0,
             'bytes_uploaded': 0,
             'bytes_skipped': 0
         }
@@ -182,6 +183,7 @@ class UploadStatistics:
         print(f"   - New files uploaded:       {self.stats['new_files']:>6}")
         print(f"   - Files updated:            {self.stats['replaced_files']:>6}")
         print(f"   - Files skipped (unchanged):{self.stats['skipped_files']:>6}")
+        print(f"   - Files deleted:            {self.stats['deleted_files']:>6}")
         print(f"   - Failed uploads:           {self.stats['failed_files']:>6}")
         print(f"   - Total files processed:    {total_files:>6}")
         print(f"\n[DATA] Transfer Summary:")

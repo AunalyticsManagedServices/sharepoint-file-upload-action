@@ -30,6 +30,7 @@ class Config:
         12. force_upload (optional) - Force upload all files (default: False)
         13. convert_md_to_html (optional) - Convert markdown to HTML (default: True)
         14. exclude_patterns (optional) - Comma-separated exclusion patterns (default: "")
+        15. sync_delete (optional) - Delete SharePoint files not in sync set (default: False)
         """
         # Required arguments
         self.site_name = sys.argv[1]
@@ -48,6 +49,7 @@ class Config:
         self.force_upload = (sys.argv[12] if len(sys.argv) > 12 else "false").lower() == "true"
         self.convert_md_to_html = (sys.argv[13] if len(sys.argv) > 13 else "true").lower() == "true"
         self.exclude_patterns = sys.argv[14] if len(sys.argv) > 14 and sys.argv[14] else ""
+        self.sync_delete = (sys.argv[15] if len(sys.argv) > 15 else "false").lower() == "true"
 
         # Derived values
         self.tenant_url = f'https://{self.sharepoint_host_name}/sites/{self.site_name}'

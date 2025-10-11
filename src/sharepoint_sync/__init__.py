@@ -44,7 +44,9 @@ from .graph_api import (
     check_and_create_filehash_column,
     comprehensive_column_verification,
     verify_column_for_filehash_operations,
-    test_column_accessibility
+    test_column_accessibility,
+    list_files_in_folder_recursive,
+    delete_file_from_sharepoint
 )
 from .monitoring import upload_stats, rate_monitor, print_rate_limiting_summary
 from .file_handler import (
@@ -68,6 +70,8 @@ __all__ = [
     'comprehensive_column_verification',
     'verify_column_for_filehash_operations',
     'test_column_accessibility',
+    'list_files_in_folder_recursive',
+    'delete_file_from_sharepoint',
     # File Operations
     'calculate_file_hash',
     'sanitize_sharepoint_name',

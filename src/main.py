@@ -34,14 +34,14 @@ PARAMETERS:
 
     <tenant_id>
         Azure AD tenant ID (GUID format).
-        Find in Azure Portal  Azure Active Directory  Properties  Tenant ID
+        Find in Azure Portal → Azure Active Directory → Properties → Tenant ID
         `Example`: '12345678-1234-1234-1234-123456789abc'
         `Type`: String (GUID)
         `Position`: 3
 
     <client_id>
         Azure AD App Registration application (client) ID.
-        Find in Azure Portal  App Registrations  Your App  Application ID
+        Find in Azure Portal → App Registrations → Your App → Application ID
         Requires Sites.ReadWrite.All (or Sites.Manage.All for column creation)
         `Example`: '87654321-4321-4321-4321-cba987654321'
         `Type`: String (GUID)
@@ -49,7 +49,7 @@ PARAMETERS:
 
     <client_secret>
         Azure AD App Registration client secret value.
-        Create in Azure Portal  App Registrations  Certificates & secrets
+        Create in Azure Portal → App Registrations → Certificates & secrets
         `WARNING: Keep this secure! Never commit to version control.
         Store in GitHub Secrets or environment variables.
         `Type`: String (sensitive)
@@ -141,7 +141,7 @@ PARAMETERS:
         Convert Markdown (.md) files to HTML with embedded Mermaid SVG diagrams.
         Default: 'True'
         Values: 'True' or 'False' (case-sensitive string)
-        When True, converts .md  .html with GitHub-flavored styling and Mermaid rendering.
+        When True, converts .md → .html with GitHub-flavored styling and Mermaid rendering.
         When False, uploads .md files as-is (raw markdown).
         Requires: Node.js and @mermaid-js/mermaid-cli for diagram conversion.
         `Type`: String ('True'/'False')
@@ -291,7 +291,10 @@ import time
 
 # SharePoint sync modules
 from sharepoint_sync.config import parse_config
-from sharepoint_sync.graph_api import create_graph_client, check_and_create_filehash_column, get_sharepoint_list_item_by_filename
+from sharepoint_sync.graph_api import (
+    create_graph_client, check_and_create_filehash_column, get_sharepoint_list_item_by_filename,
+    list_files_in_folder_recursive, delete_file_from_sharepoint
+)
 from sharepoint_sync.file_handler import should_exclude_path, calculate_file_hash, sanitize_path_components
 from sharepoint_sync.uploader import upload_file_with_structure, upload_file, ensure_folder_exists
 from sharepoint_sync.markdown_converter import convert_markdown_to_html
@@ -401,7 +404,7 @@ def calculate_base_path(local_files, local_dirs):
     elif local_files:
         # If only files were selected, find their common parent directory
         # os.path.commonpath() finds the longest common path prefix
-        # Example: ["/a/b/file1.txt", "/a/b/c/file2.txt"]  "/a/b"
+        # Example: ["/a/b/file1.txt", "/a/b/c/file2.txt"] → "/a/b"
         base_path = os.path.dirname(os.path.commonpath(local_files))
 
     return base_path
@@ -599,7 +602,7 @@ def process_markdown_file(file_path, root_drive, base_path, config, filehash_ava
         # Only upload if the HTML needs updating
         if html_needs_update:
             if is_debug_enabled():
-                            print(f"[] Processing file: {original_html_path} (from temp: {html_path})")
+                            print(f"[→] Processing file: {original_html_path} (from temp: {html_path})")
             for i in range(config.max_retry):
                 try:
                     upload_file(
@@ -717,6 +720,128 @@ def get_library_name_from_path(upload_path):
 
 
 # ====================================================================
+# SYNC DELETION - Remove orphaned files from SharePoint
+# ====================================================================
+
+def identify_files_to_delete(sharepoint_files, local_files_set, base_path):
+    """
+    Identify SharePoint files that should be deleted (not in local sync set).
+
+    Args:
+        sharepoint_files (list): List of file dicts from SharePoint (from list_files_in_folder_recursive)
+        local_files_set (set): Set of relative file paths from local sync set
+        base_path (str): Base path used for folder structure
+
+    Returns:
+        list: List of file dicts that should be deleted
+
+    Note:
+        Compares SharePoint files with local sync set to identify orphaned files
+        that no longer exist locally and should be deleted from SharePoint.
+    """
+    files_to_delete = []
+    debug_enabled = is_debug_enabled()
+
+    if debug_enabled:
+        print(f"\n[=] Comparing {len(sharepoint_files)} SharePoint files with {len(local_files_set)} local files...")
+
+    for sp_file in sharepoint_files:
+        # The path in SharePoint (relative to upload folder)
+        sp_path = sp_file['path']
+
+        # Check if this file exists in our local set
+        if sp_path not in local_files_set:
+            files_to_delete.append(sp_file)
+
+            if debug_enabled:
+                print(f"[×] File marked for deletion: {sp_path} (not in local sync set)")
+
+    return files_to_delete
+
+
+def perform_sync_deletion(root_drive, local_files, base_path, config):
+    """
+    Delete files from SharePoint that are not in the local sync set.
+
+    Args:
+        root_drive: SharePoint Drive object representing the upload folder
+        local_files (list): List of local file paths being synced
+        base_path (str): Base path for maintaining folder structure
+        config: Configuration object
+
+    Returns:
+        int: Number of files successfully deleted
+
+    Safety measures:
+        - Only deletes files within the sync target folder
+        - Requires explicit sync_delete flag to be enabled
+        - Compares full relative paths to avoid accidental deletions
+        - Provides detailed logging of deletions
+    """
+    debug_enabled = is_debug_enabled()
+
+    # Step 1: List all files currently in SharePoint folder
+    print("\n[*] Listing files in SharePoint target folder...")
+    try:
+        sharepoint_files = list_files_in_folder_recursive(root_drive, config.upload_path)
+        print(f"[OK] Found {len(sharepoint_files)} files in SharePoint")
+    except Exception as e:
+        print(f"[!] Failed to list SharePoint files: {str(e)}")
+        return 0
+
+    # Step 2: Build set of local file relative paths
+    # Need to calculate the relative paths the same way upload does
+    local_files_set = set()
+
+    for local_file in local_files:
+        # Calculate relative path from base_path
+        if base_path and os.path.isabs(local_file):
+            try:
+                rel_path = os.path.relpath(local_file, base_path)
+            except ValueError:
+                # On Windows, relpath fails if paths are on different drives
+                rel_path = os.path.basename(local_file)
+        else:
+            rel_path = os.path.basename(local_file)
+
+        # Normalize path separators to forward slashes (SharePoint style)
+        rel_path = rel_path.replace(os.sep, '/')
+
+        # Handle markdown to HTML conversion
+        if local_file.lower().endswith('.md') and config.convert_md_to_html:
+            # If converting .md to .html, the SharePoint file will be .html
+            rel_path = rel_path[:-3] + '.html'
+
+        local_files_set.add(rel_path)
+
+        if debug_enabled:
+            print(f"[=] Local file: {rel_path}")
+
+    # Step 3: Identify files to delete
+    files_to_delete = identify_files_to_delete(sharepoint_files, local_files_set, base_path)
+
+    if not files_to_delete:
+        print("[OK] No orphaned files to delete from SharePoint")
+        return 0
+
+    # Step 4: Delete orphaned files
+    print(f"\n[!] Found {len(files_to_delete)} orphaned files to delete from SharePoint")
+
+    deleted_count = 0
+    for file_info in files_to_delete:
+        try:
+            success = delete_file_from_sharepoint(file_info['drive_item'], file_info['path'])
+            if success:
+                deleted_count += 1
+                upload_stats.stats['deleted_files'] += 1
+        except Exception as e:
+            print(f"[!] Error deleting {file_info['path']}: {str(e)}")
+
+    print(f"[✓] Successfully deleted {deleted_count} orphaned files from SharePoint")
+    return deleted_count
+
+
+# ====================================================================
 # MAIN EXECUTION
 # ====================================================================
 
@@ -751,6 +876,12 @@ def main():
     # Show exclusion patterns if any
     if config.exclude_patterns_list:
         print(f"[=] Exclusion patterns enabled: {', '.join(config.exclude_patterns_list)}")
+
+    # Show sync deletion mode
+    if config.sync_delete:
+        print("[!] Sync deletion enabled - files in SharePoint but not in sync set will be DELETED")
+    else:
+        print("[OK] Sync deletion disabled - no files will be removed from SharePoint")
 
     # Show file discovery details
     print(f"[=] Current working directory: {os.getcwd()}")
@@ -852,6 +983,10 @@ def main():
         else:
             # File might have been deleted/moved since discovery
             print(f"[Warning] Skipping {f} as it's not a file")
+
+    # Perform sync deletion if enabled
+    if config.sync_delete:
+        perform_sync_deletion(root_drive, local_files, base_path, config)
 
     # Print final summary report
     print_summary(len(local_files))
