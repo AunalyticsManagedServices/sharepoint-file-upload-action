@@ -172,18 +172,26 @@ class UploadStatistics:
             'bytes_skipped': 0
         }
 
-    def print_summary(self, total_files):
+    def print_summary(self, total_files, whatif_mode=False):
         """
         Print final summary report of upload statistics.
 
         Args:
             total_files (int): Total number of files processed
+            whatif_mode (bool): Whether sync deletion is in WhatIf mode
         """
         print(f"[STATS] Sync Statistics:")
         print(f"   - New files uploaded:       {self.stats['new_files']:>6}")
         print(f"   - Files updated:            {self.stats['replaced_files']:>6}")
         print(f"   - Files skipped (unchanged):{self.stats['skipped_files']:>6}")
-        print(f"   - Files deleted:            {self.stats['deleted_files']:>6}")
+
+        # Show deleted files with WhatIf indicator if applicable
+        if self.stats['deleted_files'] > 0:
+            if whatif_mode:
+                print(f"   - Files deleted (WhatIf):   {self.stats['deleted_files']:>6}")
+            else:
+                print(f"   - Files deleted:            {self.stats['deleted_files']:>6}")
+
         print(f"   - Failed uploads:           {self.stats['failed_files']:>6}")
         print(f"   - Total files processed:    {total_files:>6}")
         print(f"\n[DATA] Transfer Summary:")

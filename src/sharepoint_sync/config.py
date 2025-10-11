@@ -31,6 +31,7 @@ class Config:
         13. convert_md_to_html (optional) - Convert markdown to HTML (default: True)
         14. exclude_patterns (optional) - Comma-separated exclusion patterns (default: "")
         15. sync_delete (optional) - Delete SharePoint files not in sync set (default: False)
+        16. sync_delete_whatif (optional) - Preview deletions without actually deleting (default: True)
         """
         # Required arguments
         self.site_name = sys.argv[1]
@@ -50,6 +51,7 @@ class Config:
         self.convert_md_to_html = (sys.argv[13] if len(sys.argv) > 13 else "true").lower() == "true"
         self.exclude_patterns = sys.argv[14] if len(sys.argv) > 14 and sys.argv[14] else ""
         self.sync_delete = (sys.argv[15] if len(sys.argv) > 15 else "false").lower() == "true"
+        self.sync_delete_whatif = (sys.argv[16] if len(sys.argv) > 16 else "true").lower() == "true"
 
         # Derived values
         self.tenant_url = f'https://{self.sharepoint_host_name}/sites/{self.site_name}'

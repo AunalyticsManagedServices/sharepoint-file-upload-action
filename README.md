@@ -17,8 +17,9 @@
   - [Exclusion Patterns](#exclusion-patterns)
 - [Usage Examples](#usage-examples)
 - [Advanced Features](#advanced-features)
-  - [Smart Sync](#smart-sync)
+  - [Smart Sync](#smart-sync-with-content-hashing)
   - [Markdown Conversion](#markdown-conversion)
+  - [Sync Deletion](#sync-deletion)
 - [Security Considerations](#security-considerations)
   - [Sites.Selected Setup](#sitesselected-setup)
 - [Troubleshooting](#troubleshooting)
@@ -207,6 +208,8 @@ jobs:
 | `force_upload` | `false` | Skip change detection, upload all files |
 | `convert_md_to_html` | `true` | Convert Markdown files to HTML |
 | `exclude_patterns` | `""` | Comma-separated exclusion patterns (see [Exclusion Patterns](#exclusion-patterns)) |
+| `sync_delete` | `false` | Delete SharePoint files not in local sync set (see [Sync Deletion](#sync-deletion)) |
+| `sync_delete_whatif` | `true` | Preview deletions without actually deleting (requires `sync_delete=true`) |
 | `login_endpoint` | `"login.microsoftonline.com"` | Azure AD login endpoint |
 | `graph_endpoint` | `"graph.microsoft.com"` | Microsoft Graph API endpoint |
 
@@ -283,6 +286,43 @@ jobs:
   exclude_patterns: "*.log,*.tmp"                    # Exclude log and temp files
   exclude_patterns: "__pycache__,node_modules,.git"  # Exclude common directories
   ```
+
+**`sync_delete`** - Enable bidirectional sync with file deletion
+- **Default**: `false` (disabled - safer default)
+- **Purpose**: Delete files from SharePoint that no longer exist in your repository
+- **When to use `true`**:
+  - Maintaining exact mirror of repository in SharePoint
+  - Cleaning up after file renames/moves
+  - Removing obsolete documentation
+  - Syncing restructured content
+- ⚠️ **Important**: Always test with `sync_delete_whatif: true` first!
+- Examples:
+  ```yaml
+  sync_delete: false  # Default - no deletions
+  sync_delete: true   # Enable deletion (use with whatif first!)
+  ```
+- 🔒 **Safety**: Only deletes within specified `upload_path`, requires explicit opt-in
+
+**`sync_delete_whatif`** - Preview deletions without actually deleting
+- **Default**: `true` (preview mode - safer default)
+- **Purpose**: Shows what files would be deleted without actually deleting them
+- **Requires**: `sync_delete: true` to have any effect
+- **When to use `false`**: After reviewing WhatIf output and confirming deletions are correct
+- **Recommended workflow**:
+  1. First run: `sync_delete: true` + `sync_delete_whatif: true` (preview)
+  2. Review console output to verify deletions are expected
+  3. Second run: `sync_delete: true` + `sync_delete_whatif: false` (actual deletion)
+- Examples:
+  ```yaml
+  # Step 1: Preview what would be deleted (safe)
+  sync_delete: true
+  sync_delete_whatif: true   # Shows "File Deleted (WhatIf): filename"
+
+  # Step 2: Actually delete after reviewing (requires explicit false)
+  sync_delete: true
+  sync_delete_whatif: false  # Actually deletes files
+  ```
+- 💡 **Tip**: Leave as `true` for safety - requires conscious decision to set to `false`
 
 **`login_endpoint`** - Azure AD authentication endpoint
 - **Default**: `"login.microsoftonline.com"` (Commercial cloud)
@@ -592,6 +632,146 @@ The action automatically sanitizes Mermaid diagrams to fix common syntax issues 
 | Curly braces in comments | Removed | Confuses the Mermaid renderer |
 
 This sanitization happens automatically during conversion - no action required on your part!
+
+### Sync Deletion
+
+The action supports **bidirectional sync** - it can delete files from SharePoint that no longer exist in your repository. This maintains true synchronization between your GitHub repository and SharePoint.
+
+#### 🎯 Use Cases
+
+- **Renamed files**: Old file removed from SharePoint when renamed in GitHub
+- **Deleted files**: Removed from SharePoint when deleted from repository
+- **Restructured folders**: Clean up after reorganizing your documentation
+- **Obsolete content**: Remove outdated documentation automatically
+
+#### 🔒 Safety Features
+
+1. **Explicit Opt-In**: Disabled by default (`sync_delete: false`)
+2. **WhatIf Mode**: Preview deletions before actually deleting (enabled by default when sync_delete=true)
+3. **Scoped Deletion**: Only deletes within the specified `upload_path` folder
+4. **Statistics Tracking**: Reports number of files deleted for audit trail
+
+#### ⚙️ Configuration
+
+Two parameters control sync deletion:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `sync_delete` | `false` | Enable sync deletion feature |
+| `sync_delete_whatif` | `true` | Preview mode - shows what would be deleted without actually deleting |
+
+#### 📝 Usage Examples
+
+**Example 1: Preview What Would Be Deleted (Safe - Recommended First Step)**
+
+```yaml
+- name: Preview SharePoint Sync Deletions
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  with:
+    site_name: "MySite"
+    sharepoint_host_name: "company.sharepoint.com"
+    tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
+    client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
+    client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
+    upload_path: "Shared Documents/Documentation"
+    file_path: "docs/**/*"
+    file_path_recursive_match: true
+    sync_delete: true              # Enable deletion feature
+    sync_delete_whatif: true       # Preview mode (default)
+```
+
+**Console Output (WhatIf Mode):**
+```
+[!] Sync deletion enabled in WHATIF mode - will show what would be deleted without actually deleting
+[*] Listing files in SharePoint target folder...
+[OK] Found 150 files in SharePoint
+
+[!] Found 3 orphaned files (WhatIf mode - no actual deletions will occur)
+File Deleted (WhatIf): old-readme.md
+File Deleted (WhatIf): deprecated/guide.md
+File Deleted (WhatIf): archive/notes.txt
+[✓] WhatIf: Would delete 3 orphaned files from SharePoint
+
+============================================================
+[✓] SYNC PROCESS COMPLETED
+============================================================
+[STATS] Sync Statistics:
+   - New files uploaded:          2
+   - Files updated:               1
+   - Files skipped (unchanged):   145
+   - Files deleted (WhatIf):      3
+   - Failed uploads:              0
+   - Total files processed:       148
+============================================================
+```
+
+**Example 2: Actually Delete Orphaned Files**
+
+Once you've reviewed the WhatIf output and are confident the deletions are correct:
+
+```yaml
+- name: Sync to SharePoint with Cleanup
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  with:
+    site_name: "MySite"
+    sharepoint_host_name: "company.sharepoint.com"
+    tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
+    client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
+    client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
+    upload_path: "Shared Documents/Documentation"
+    file_path: "docs/**/*"
+    file_path_recursive_match: true
+    sync_delete: true              # Enable deletion feature
+    sync_delete_whatif: false      # ACTUALLY DELETE (set explicitly)
+```
+
+**Console Output (Actual Deletion):**
+```
+[!] Sync deletion enabled - files in SharePoint but not in sync set will be DELETED
+[*] Listing files in SharePoint target folder...
+[OK] Found 150 files in SharePoint
+
+[!] Found 3 orphaned files to delete from SharePoint
+File Deleted: old-readme.md
+File Deleted: deprecated/guide.md
+File Deleted: archive/notes.txt
+[✓] Successfully deleted 3 orphaned files from SharePoint
+
+============================================================
+[✓] SYNC PROCESS COMPLETED
+============================================================
+[STATS] Sync Statistics:
+   - New files uploaded:          2
+   - Files updated:               1
+   - Files skipped (unchanged):   145
+   - Files deleted:               3
+   - Failed uploads:              0
+   - Total files processed:       148
+============================================================
+```
+
+#### ⚠️ Important Notes
+
+1. **Test with WhatIf First**: Always run with `sync_delete_whatif: true` first to verify what will be deleted
+2. **Review Output Carefully**: Check that only expected files are marked for deletion
+3. **Permanent Deletion**: Deleted files may be recoverable from SharePoint recycle bin (depends on SharePoint configuration)
+4. **Folder Structure**: Considers full relative paths including folders when comparing files
+5. **Markdown Conversion**: Accounts for `.md` → `.html` conversion when identifying orphaned files
+
+#### 🔄 How It Works
+
+1. **List SharePoint Files**: Recursively lists all files in the target SharePoint folder
+2. **Build Local Set**: Creates a set of all files being uploaded (accounting for `.md` → `.html` conversion)
+3. **Identify Orphans**: Compares SharePoint files with local set to find files that no longer exist locally
+4. **Delete or Preview**: Either shows what would be deleted (WhatIf) or actually deletes the files
+
+#### 💡 Best Practices
+
+- **Start with WhatIf**: Always enable WhatIf mode first to preview deletions
+- **Use in Scheduled Workflows**: Combine with scheduled runs for automated cleanup
+- **Monitor Statistics**: Review the deletion count in workflow logs
+- **Test in Non-Production**: Test sync deletion in a test SharePoint site first
+- **Document Your Setup**: Note which repositories use sync deletion for team awareness
 
 ### Filename Sanitization
 

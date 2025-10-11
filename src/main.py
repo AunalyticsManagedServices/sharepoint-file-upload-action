@@ -651,12 +651,13 @@ def process_markdown_file(file_path, root_drive, base_path, config, filehash_ava
 # SUMMARY REPORT
 # ====================================================================
 
-def print_summary(total_files):
+def print_summary(total_files, whatif_mode=False):
     """
     Print final summary report with upload statistics.
 
     Args:
         total_files (int): Total number of files processed
+        whatif_mode (bool): Whether sync deletion is in WhatIf mode
     """
     def format_bytes(bytes_val):
         """Convert bytes to human-readable format"""
@@ -677,6 +678,14 @@ def print_summary(total_files):
     print(f"   - New files uploaded:       {stats['new_files']:>6}")
     print(f"   - Files updated:            {stats['replaced_files']:>6}")
     print(f"   - Files skipped (unchanged):{stats['skipped_files']:>6}")
+
+    # Show deleted files with WhatIf indicator if applicable
+    if stats['deleted_files'] > 0:
+        if whatif_mode:
+            print(f"   - Files deleted (WhatIf):   {stats['deleted_files']:>6}")
+        else:
+            print(f"   - Files deleted:            {stats['deleted_files']:>6}")
+
     print(f"   - Failed uploads:           {stats['failed_files']:>6}")
     print(f"   - Total files processed:    {total_files:>6}")
     print(f"\n[DATA] Transfer Summary:")
@@ -824,20 +833,30 @@ def perform_sync_deletion(root_drive, local_files, base_path, config):
         print("[OK] No orphaned files to delete from SharePoint")
         return 0
 
-    # Step 4: Delete orphaned files
-    print(f"\n[!] Found {len(files_to_delete)} orphaned files to delete from SharePoint")
+    # Step 4: Delete orphaned files (or show what would be deleted in WhatIf mode)
+    if config.sync_delete_whatif:
+        print(f"\n[!] Found {len(files_to_delete)} orphaned files (WhatIf mode - no actual deletions will occur)")
+    else:
+        print(f"\n[!] Found {len(files_to_delete)} orphaned files to delete from SharePoint")
 
     deleted_count = 0
     for file_info in files_to_delete:
         try:
-            success = delete_file_from_sharepoint(file_info['drive_item'], file_info['path'])
+            success = delete_file_from_sharepoint(
+                file_info['drive_item'],
+                file_info['path'],
+                whatif=config.sync_delete_whatif
+            )
             if success:
                 deleted_count += 1
                 upload_stats.stats['deleted_files'] += 1
         except Exception as e:
             print(f"[!] Error deleting {file_info['path']}: {str(e)}")
 
-    print(f"[✓] Successfully deleted {deleted_count} orphaned files from SharePoint")
+    if config.sync_delete_whatif:
+        print(f"[✓] WhatIf: Would delete {deleted_count} orphaned files from SharePoint")
+    else:
+        print(f"[✓] Successfully deleted {deleted_count} orphaned files from SharePoint")
     return deleted_count
 
 
@@ -879,7 +898,10 @@ def main():
 
     # Show sync deletion mode
     if config.sync_delete:
-        print("[!] Sync deletion enabled - files in SharePoint but not in sync set will be DELETED")
+        if config.sync_delete_whatif:
+            print("[!] Sync deletion enabled in WHATIF mode - will show what would be deleted without actually deleting")
+        else:
+            print("[!] Sync deletion enabled - files in SharePoint but not in sync set will be DELETED")
     else:
         print("[OK] Sync deletion disabled - no files will be removed from SharePoint")
 
@@ -989,7 +1011,9 @@ def main():
         perform_sync_deletion(root_drive, local_files, base_path, config)
 
     # Print final summary report
-    print_summary(len(local_files))
+    # Pass whatif mode status for proper deletion statistics labeling
+    whatif_mode = config.sync_delete and config.sync_delete_whatif
+    print_summary(len(local_files), whatif_mode=whatif_mode)
 
     # Exit with appropriate code
     # Exit code 0 = success, 1 = failure

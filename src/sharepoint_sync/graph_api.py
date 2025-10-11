@@ -1288,38 +1288,48 @@ def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
     return files
 
 
-def delete_file_from_sharepoint(drive_item, file_path):
+def delete_file_from_sharepoint(drive_item, file_path, whatif=False):
     """
     Delete a file from SharePoint.
 
     Args:
         drive_item: Office365 DriveItem object representing the file to delete
         file_path (str): Relative path of the file (for logging)
+        whatif (bool): If True, simulate deletion without actually deleting (default: False)
 
     Returns:
-        bool: True if deletion successful, False otherwise
+        bool: True if deletion successful (or would be successful in whatif mode), False otherwise
 
     Note:
         This function uses the Office365 REST Python Client library to delete
-        the file. It provides detailed logging in debug mode.
+        the file. It provides detailed logging in debug mode. WhatIf mode allows
+        users to preview what would be deleted without actually performing deletions.
     """
     debug_enabled = is_debug_enabled()
 
     try:
-        if debug_enabled:
-            print(f"[×] Deleting file from SharePoint: {file_path}")
+        if whatif:
+            # WhatIf mode - just show what would be deleted
+            print(f"File Deleted (WhatIf): {file_path}")
+            if debug_enabled:
+                print(f"  → Would delete this file (WhatIf mode active)")
+            return True
+        else:
+            # Actually delete the file
+            if debug_enabled:
+                print(f"[×] Deleting file from SharePoint: {file_path}")
 
-        # Delete the file using the DriveItem's delete method
-        drive_item.delete_object().execute_query()
+            # Delete the file using the DriveItem's delete method
+            drive_item.delete_object().execute_query()
 
-        # Always show simple deletion message
-        print(f"File Deleted: {file_path}")
+            # Always show simple deletion message
+            print(f"File Deleted: {file_path}")
 
-        # Show detailed message only in DEBUG mode
-        if debug_enabled:
-            print(f"  → Deletion confirmed")
+            # Show detailed message only in DEBUG mode
+            if debug_enabled:
+                print(f"  → Deletion confirmed")
 
-        return True
+            return True
 
     except Exception as e:
         print(f"[!] Failed to delete file '{file_path}': {str(e)}")
