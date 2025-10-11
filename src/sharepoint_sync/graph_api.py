@@ -25,8 +25,14 @@ site_drive_id_cache = {}
 
 def make_graph_request_with_retry(url, headers, method='GET', json_data=None, data=None, params=None, max_retries=3):
     """
-    Make a Graph API request with proper retry-after handling for 429 responses.
+    Make a Graph API request with proper retry handling for transient errors.
     Includes rate limiting monitoring via response header analysis.
+
+    Retry Logic:
+        - 429 (Rate Limit): Waits for Retry-After header duration
+        - 5xx (Server Error): Exponential backoff (1s, 3s, 7s)
+        - 409 (Conflict/Lock): Exponential backoff (2s, 4s, 8s) - files being processed
+        - 4xx (Client Error): No retry (except 409)
 
     Args:
         url (str): The Graph API endpoint URL
@@ -35,16 +41,17 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, da
         json_data (dict): JSON data for POST/PATCH requests (mutually exclusive with data)
         data (bytes): Binary data for PUT/POST requests (mutually exclusive with json_data)
         params (dict): URL parameters for GET requests
-        max_retries (int): Maximum number of retry attempts
+        max_retries (int): Maximum number of retry attempts (default: 3)
 
     Returns:
         requests.Response: The HTTP response object
 
     Raises:
-        Exception: If all retries are exhausted or non-retryable error occurs
+        Exception: If all retries are exhausted for 429 or 5xx errors
 
     Note:
         Use json_data for JSON requests or data for binary uploads, not both.
+        409 errors return response after retries (no exception) for graceful handling.
     """
     debug_metadata = is_debug_metadata_enabled()
 
@@ -117,6 +124,25 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, da
                         print(f"[!] Server errors exhausted all retries. Final response:")
                     print(f"[DEBUG] {response.text[:500]}")
                     raise Exception(f"Graph API server error: {response.status_code} after {max_retries} retries")
+
+            elif response.status_code == 409:
+                # Conflict error (file locked, being processed, etc.) - retry with exponential backoff
+                # This is often transient (SharePoint processing, virus scan, indexing)
+                if attempt < max_retries:
+                    wait_seconds = (2 ** attempt) + 2  # 2, 4, 8 seconds (longer than server errors)
+                    if is_debug_enabled():
+                        print(f"[!] Conflict/Lock error (409). File may be locked or processing. Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
+                    if debug_metadata:
+                        print(f"[DEBUG] Conflict response: {response.text[:300]}")
+                    time.sleep(wait_seconds)
+                    continue
+                else:
+                    if is_debug_enabled():
+                        print(f"[!] Conflict errors exhausted all retries. File may be locked.")
+                    if debug_metadata:
+                        print(f"[DEBUG] Final 409 response: {response.text[:500]}")
+                    # Don't raise exception - return response to allow graceful handling
+                    return response
 
             # Success or client error (don't retry client errors like 400, 401, 403, 404)
             return response
@@ -1387,9 +1413,10 @@ def list_files_in_folder_recursive(drive, folder_path, site_url, tenant_id, clie
                 if debug_enabled:
                     print(f"  [→] Entering subfolder: {item_path}")
 
-                # Store the child item ID for the recursive call
+                # Store the child item ID in the cache for the recursive call
                 child_item_id = child.get('id', '')
-                list_files_in_folder_recursive._current_item_id = child_item_id
+                previous_item_id = site_drive_id_cache.get('current_item_id')
+                site_drive_id_cache['current_item_id'] = child_item_id
 
                 # Recursively get files from this subfolder
                 subfolder_files = list_files_in_folder_recursive(
@@ -1397,6 +1424,9 @@ def list_files_in_folder_recursive(drive, folder_path, site_url, tenant_id, clie
                     client_secret, login_endpoint, graph_endpoint, item_path
                 )
                 files.extend(subfolder_files)
+
+                # Restore parent folder's item ID after recursion
+                site_drive_id_cache['current_item_id'] = previous_item_id
 
                 if debug_enabled:
                     print(f"  [←] Exited subfolder: {item_path} (found {len(subfolder_files)} files)")
