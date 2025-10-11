@@ -52,7 +52,7 @@ def sanitize_mermaid_code(mermaid_code):
 
     # 4. Fix double pipes in edge definitions (||) -> (|)
     # Pattern: -->|| or ---|| or ||| should become -->| or ---|
-    sanitized = re.sub(r'(\-\->|\-\-\-)\|\|', r'\1|', sanitized)
+    sanitized = re.sub(r'(-->|---)\|\|', r'\1|', sanitized)
     sanitized = re.sub(r'\|\|(\w)', r'|\1', sanitized)
 
     # 5. Escape special characters that break Mermaid syntax
@@ -81,7 +81,7 @@ def sanitize_mermaid_code(mermaid_code):
         return f'[{sanitize_content(content)}]'
 
     # Apply sanitization to content inside square brackets []
-    sanitized = re.sub(r'\[([^\]]*)\]', sanitize_node_content, sanitized)
+    sanitized = re.sub(r'\[([^]]*)]', sanitize_node_content, sanitized)
 
     # 6. Handle parentheses-based node shapes: (text), ((text)), etc.
     def sanitize_paren_content(match):
@@ -105,7 +105,7 @@ def sanitize_mermaid_code(mermaid_code):
         return f'{opening_braces}{sanitize_content(content)}{closing_braces}'
 
     # Match single or double curly braces: {text}, {{text}}
-    sanitized = re.sub(r'(\{+)([^{}]+)(\}+)', sanitize_curly_content, sanitized)
+    sanitized = re.sub(r'(\{+)([^{}]+)(}+)', sanitize_curly_content, sanitized)
 
     # 8. Handle trapezoid node shapes: [/text\] and [\text/]
     def sanitize_trapezoid_content(match):
@@ -117,8 +117,8 @@ def sanitize_mermaid_code(mermaid_code):
         return f'{opening}{sanitize_content(content)}{closing}'
 
     # Match trapezoid patterns
-    sanitized = re.sub(r'(\[/)(.*?)(\\\])', sanitize_trapezoid_content, sanitized)
-    sanitized = re.sub(r'(\[\\\x5c)(.*?)(/\])', sanitize_trapezoid_content, sanitized)
+    sanitized = re.sub(r'(\[/)(.*?)(\\])', sanitize_trapezoid_content, sanitized)
+    sanitized = re.sub(r'(\[\\)(.*?)(/])', sanitize_trapezoid_content, sanitized)
 
     # 9. Handle hexagon node shapes: {{text}}
     # Already handled by curly brace sanitization above
@@ -472,10 +472,11 @@ def convert_markdown_files_parallel(md_file_paths, max_workers=4):
     Example:
         >>> md_files = ['doc1.md', 'doc2.md', 'doc3.md']
         >>> results = convert_markdown_files_parallel(md_files)
-        >>> for md_file, (success, result) in results.items():
+        >>> for md_file, (success, html_or_error) in results.items():
         ...     if success:
-        ...         with open(md_file.replace('.md', '.html'), 'w') as f:
-        ...             f.write(result)
+        ...         html_content = html_or_error  # type: str
+        ...         with open(md_file.replace('.md', '.html'), 'w', encoding='utf-8') as f:
+        ...             f.write(html_content)
 
     Note:
         - 3-5x faster than sequential conversion for multiple files
@@ -503,11 +504,11 @@ def convert_markdown_files_parallel(md_file_paths, max_workers=4):
                 os.path.basename(md_path)
             )
 
-            return (True, html_content)
+            return True, html_content
 
         except Exception as e:
             error_msg = f"Conversion failed: {str(e)[:200]}"
-            return (False, error_msg)
+            return False, error_msg
 
     # Execute conversions in parallel
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -593,8 +594,8 @@ def convert_markdown_to_html_tempfile(md_path, output_dir=None):
             os.close(fd)
             raise write_error
 
-        return (True, html_path)
+        return True, html_path
 
     except Exception as e:
         error_msg = f"Conversion failed: {str(e)[:200]}"
-        return (False, error_msg)
+        return False, error_msg

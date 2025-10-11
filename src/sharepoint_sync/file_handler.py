@@ -260,7 +260,7 @@ def should_exclude_path(path, exclude_patterns):
     return False
 
 
-def check_file_needs_update(drive, local_path, file_name, site_url, list_name, filehash_column_available,
+def check_file_needs_update(local_path, file_name, site_url, list_name, filehash_column_available,
                             tenant_id=None, client_id=None, client_secret=None, login_endpoint=None,
                             graph_endpoint=None, upload_stats_dict=None):
     """
@@ -272,7 +272,6 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
     2. Size comparison as fallback - works without custom columns
 
     Args:
-        drive (DriveItem): The folder to check for existing file
         local_path (str): Path to the local file
         file_name (str): Name of the file to check
         site_url (str): SharePoint site URL (e.g., 'company.sharepoint.com')
@@ -286,15 +285,15 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
         upload_stats_dict (dict, optional): Upload statistics dictionary to update
 
     Returns:
-        tuple: (needs_update: bool, exists: bool, remote_file: DriveItem or None, local_hash: str or None)
+        tuple: (needs_update: bool, exists: bool, remote_file: None, local_hash: str or None)
             - needs_update: True if file should be uploaded
             - exists: True if file exists in SharePoint
-            - remote_file: The existing SharePoint file object (if exists)
+            - remote_file: Always None (no longer using Office365 DriveItem objects)
             - local_hash: The calculated hash of the local file (if computed)
 
     Example:
         needs_update, exists, remote, hash_val = check_file_needs_update(
-            folder, "/path/to/file.pdf", "file.pdf", "site.sharepoint.com", "Documents", True,
+            "/path/to/file.pdf", "file.pdf", "site.sharepoint.com", "Documents", True,
             tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
         )
         if not needs_update:
@@ -320,226 +319,94 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
     if is_debug_enabled():
         print(f"[?] Checking if file exists in SharePoint: {sanitized_name}")
 
+    # Use Graph REST API to check file existence and get metadata
+    # This replaces the Office365 library usage
     try:
-        # Get all children in the folder to find our file
-        # This is more reliable than get_by_path for some SharePoint configurations
-        # Request all needed properties upfront to avoid secondary queries
-        children = drive.children.get().select(["name", "file", "folder", "size", "id"]).execute_query()
+        # Try to get the FileHash property and other metadata using direct REST API
+        hash_comparison_available = False
+        file_exists = False
+        remote_size = None
 
-        existing_file = None
-        for child in children:
-            # Use getattr for safe attribute access
-            child_name = getattr(child, 'name', None)
-            if child_name and child_name == sanitized_name:
-                existing_file = child
-                break
+        # Try to get file metadata using Graph REST API
+        if all([tenant_id, client_id, client_secret, login_endpoint, graph_endpoint]):
+            try:
+                # Use direct Graph API REST calls to get SharePoint list item with custom columns
+                from .graph_api import get_sharepoint_list_item_by_filename
 
-        if existing_file is None:
-            # File not found in folder
+                list_item_data = get_sharepoint_list_item_by_filename(
+                    site_url, list_name, sanitized_name,
+                    tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                )
+
+                if list_item_data and 'fields' in list_item_data:
+                    file_exists = True  # File found in SharePoint
+                    fields = list_item_data['fields']
+
+                    if debug_metadata:
+                        print(f"[DEBUG] Retrieving metadata for {sanitized_name}")
+                        print(f"[DEBUG] Available field properties: {list(fields.keys())}")
+
+                    # Get file size if available
+                    remote_size = fields.get('FileSizeDisplay') or fields.get('File_x0020_Size')
+                    if isinstance(remote_size, str):
+                        try:
+                            remote_size = int(remote_size)
+                        except (ValueError, TypeError):
+                            remote_size = None
+
+                    # Try to get FileHash if column is available
+                    if filehash_column_available:
+                        remote_hash = fields.get('FileHash')
+
+                        if remote_hash:
+                            hash_comparison_available = True
+                            if is_debug_enabled():
+                                print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
+
+                            # Compare hashes - this is the most reliable comparison
+                            if upload_stats_dict:
+                                upload_stats_dict['compared_by_hash'] = upload_stats_dict.get('compared_by_hash', 0) + 1
+
+                            if local_hash and local_hash == remote_hash:
+                                if is_debug_enabled():
+                                    print(f"[=] File unchanged (hash match): {sanitized_name}")
+                                if upload_stats_dict:
+                                    upload_stats_dict['skipped_files'] += 1
+                                    upload_stats_dict['bytes_skipped'] += local_size
+                                    upload_stats_dict['hash_matched'] = upload_stats_dict.get('hash_matched', 0) + 1
+                                return False, True, None, local_hash
+                            elif local_hash:
+                                if is_debug_enabled():
+                                    print(f"[*] File changed (hash mismatch): {sanitized_name}")
+                                return True, True, None, local_hash
+                        elif debug_metadata:
+                            print(f"[DEBUG] FileHash not found in list item fields")
+                elif debug_metadata:
+                    print(f"[DEBUG] Could not retrieve list item data for {sanitized_name}")
+
+            except Exception as api_error:
+                # File might not exist, or we can't access it
+                if is_debug_enabled():
+                    print(f"[!] Could not retrieve file metadata via REST API: {str(api_error)[:100]}")
+                file_exists = False
+                hash_comparison_available = False
+
+        # If file doesn't exist, needs upload
+        if not file_exists:
             if is_debug_enabled():
                 print(f"[+] New file to upload: {sanitized_name}")
             return True, False, None, local_hash
 
-        # First check if this is a file or folder
-        # In SharePoint, items have both 'file' and 'folder' properties, but only one is populated
-        # We need to check which one has actual content, not just if it exists
-
-        # Try to determine if this is a folder
-        is_folder = False
-        is_file = False
-
-        # Check if folder property exists and has meaningful content
-        if hasattr(existing_file, 'folder'):
-            folder_prop = getattr(existing_file, 'folder', None)
-            # SharePoint may return empty objects {} instead of None
-            # Check if it's not None AND has actual content (like childCount)
-            if folder_prop is not None:
-                # For folders, the folder property should have attributes like childCount
-                # Check for multiple folder-specific attributes to be certain
-                if (hasattr(folder_prop, 'childCount') and folder_prop.childCount is not None) or \
-                   (hasattr(folder_prop, 'child_count') and folder_prop.child_count is not None):
-                    is_folder = True
-                # Don't assume it's a folder just because the property exists
-                # Empty objects should not count as folders
-
-        # Check if file property exists and has meaningful content
-        if hasattr(existing_file, 'file'):
-            file_prop = getattr(existing_file, 'file', None)
-            # Same check for files - avoid empty objects
-            if file_prop is not None:
-                # Files should have properties like mimeType or hashes
-                # Check if it's not just an empty object
-                if hasattr(file_prop, 'mimeType') or hasattr(file_prop, 'mime_type') or hasattr(file_prop, 'hashes'):
-                    is_file = True
-                # Don't assume it's a file just because the property exists
-                # Empty objects should not count as files
-
-        # If we can't determine from the properties, try a different approach
-        # Check if the item has a size attribute (files have size, folders typically don't)
-        if not is_folder and not is_file:
-            # If we have size already, it's likely a file
-            if hasattr(existing_file, 'size') and existing_file.size is not None and existing_file.size > 0:
-                is_file = True
-            # If neither property is populated, default to treating as file
-            # (better to attempt upload than to skip)
-            else:
-                print(f"[?] Cannot determine type for {sanitized_name}, treating as file")
-                is_file = True
-
-        # Log only if there's true ambiguity (both detected as populated)
-        if is_folder and is_file:
-            print(f"[!] Warning: Item {sanitized_name} appears to be both file and folder, treating as file")
-            # Prefer file treatment to allow upload attempt
-            is_folder = False
-
-        if is_folder:
-            # It's definitely a folder
-            if is_debug_enabled():
-                print(f"[!] Conflict: Folder exists with same name as file: {sanitized_name}")
-            return True, False, None, local_hash
-
-        # Treat as file if it has file property or if we can't determine type
-        # (Better to try uploading than to skip)
-
-        # Only fetch size/date properties for files, not folders
-        # Skip if we determined this is a folder
-        if is_folder and not is_file:
-            # Don't try to get file metadata for folders
-            return True, False, None, local_hash
-
-        # First, try to get the FileHash property if it exists using direct REST API
-        hash_comparison_available = False
-
-        # Only attempt FileHash comparison if we have the necessary credentials
-        if filehash_column_available and all([tenant_id, client_id, client_secret, login_endpoint, graph_endpoint]):
-            try:
-                # Use direct Graph API REST calls to get SharePoint list item with custom columns
-                # First, try to import the function
-                try:
-                    from .graph_api import get_sharepoint_list_item_by_filename
-                except ImportError:
-                    # graph_api module not yet available
-                    if debug_metadata:
-                        print(f"[DEBUG] graph_api module not yet imported")
-                    get_sharepoint_list_item_by_filename = None
-
-                # Call the function if it was successfully imported
-                if get_sharepoint_list_item_by_filename is not None:
-                    list_item_data = get_sharepoint_list_item_by_filename(
-                        site_url, list_name, sanitized_name,
-                        tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
-                    )
-                else:
-                    list_item_data = None
-
-                if list_item_data and 'fields' in list_item_data:
-                    fields = list_item_data['fields']
-
-                    if debug_metadata:
-                        print(f"[DEBUG] Retrieving FileHash for {sanitized_name}")
-                        print(f"[DEBUG] REST API list item data: {type(list_item_data)}")
-                        print(f"[DEBUG] fields data: {type(fields)}")
-                        print(f"[DEBUG] Available field properties: {list(fields.keys())}")
-                        print(f"[DEBUG] FileHash in properties: {'FileHash' in fields}")
-                        if 'FileHash' in fields:
-                            print(f"[DEBUG] FileHash value: {fields.get('FileHash')}")
-
-                    # Access the FileHash custom column from the fields
-                    remote_hash = fields.get('FileHash')
-
-                    if remote_hash:
-                        hash_comparison_available = True
-                        if is_debug_enabled():
-                            print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
-
-                        # Compare hashes - this is the most reliable comparison
-                        if upload_stats_dict:
-                            upload_stats_dict['compared_by_hash'] = upload_stats_dict.get('compared_by_hash', 0) + 1
-
-                        if local_hash and local_hash == remote_hash:
-                            if is_debug_enabled():
-                                print(f"[=] File unchanged (hash match): {sanitized_name}")
-                            if upload_stats_dict:
-                                upload_stats_dict['skipped_files'] += 1
-                                upload_stats_dict['bytes_skipped'] += local_size
-                                upload_stats_dict['hash_matched'] = upload_stats_dict.get('hash_matched', 0) + 1
-                            return False, True, existing_file, local_hash
-                        elif local_hash:
-                            if is_debug_enabled():
-                                print(f"[*] File changed (hash mismatch): {sanitized_name}")
-                            return True, True, existing_file, local_hash
-                    elif debug_metadata:
-                        print(f"[DEBUG] FileHash not found in list item fields")
-                elif debug_metadata:
-                    print(f"[DEBUG] Could not retrieve list item data for {sanitized_name}")
-
-            except Exception as hash_error:
-                # FileHash column might not exist, or we can't access it
-                print(f"[!] Could not retrieve FileHash via REST API, falling back to size comparison: {str(hash_error)[:100]}")
-                hash_comparison_available = False
-        else:
-            # FileHash column not available or missing credentials
-            if debug_metadata:
-                if not filehash_column_available:
-                    print(f"[DEBUG] FileHash column not available, using size comparison")
-                else:
-                    print(f"[DEBUG] Missing credentials for FileHash retrieval, using size comparison")
-
         # If hash comparison wasn't available, fall back to size comparison
         if not hash_comparison_available:
-            # For files, try to get size if not already available
-            if not hasattr(existing_file, 'size'):
-                try:
-                    if is_debug_enabled():
-                        print(f"[?] Fetching file size for comparison: {sanitized_name}")
-                    # Try to refresh the item's properties
-                    # Just use the existing_file object directly since we already have it
-                    existing_file = existing_file.get().select(["size", "name", "file", "folder"]).execute_query()
-                except Exception as select_error:
-                    error_str = str(select_error)
-                    # Check if this is the specific dangerous path error
-                    if "dangerous Request.Path" in error_str or "%3Ckey%3E" in error_str:
-                        print(f"[!] SharePoint API error, will re-upload to be safe: URL encoding issue")
-                    else:
-                        print(f"[!] Failed to get file metadata, will re-upload: {select_error}")
-                    return True, False, None, local_hash
-            # File exists - compare metadata
-            # Try multiple ways to get size (different APIs use different property names)
-            remote_size = None
-
-            # Debug: Log what properties are available (verbose mode)
             if debug_metadata:
-                print(f"[DEBUG] Available properties for {sanitized_name}:")
-                print(f"  - Has 'size' attr: {hasattr(existing_file, 'size')}, value: {getattr(existing_file, 'size', 'N/A')}")
-                print(f"  - Has 'length' attr: {hasattr(existing_file, 'length')}, value: {getattr(existing_file, 'length', 'N/A')}")
-                print(f"  - Has 'properties' dict: {hasattr(existing_file, 'properties')}")
-
-                if hasattr(existing_file, 'properties') and existing_file.properties:
-                    print(f"  - Properties dict keys: {list(existing_file.properties.keys())[:10]}...")  # First 10 keys
-
-            # Try Graph API DriveItem properties
-            if hasattr(existing_file, 'size') and existing_file.size is not None:
-                remote_size = existing_file.size
-                if debug_metadata:
-                    print(f"[DEBUG] Got size from 'size' property: {remote_size}")
-            # Try SharePoint File properties
-            elif hasattr(existing_file, 'length') and existing_file.length is not None:
-                remote_size = existing_file.length
-                if debug_metadata:
-                    print(f"[DEBUG] Got size from 'length' property: {remote_size}")
-            # Try properties dictionary (dynamic properties)
-            elif hasattr(existing_file, 'properties'):
-                remote_size = existing_file.properties.get('size') or existing_file.properties.get('Size') or existing_file.properties.get('length') or existing_file.properties.get('Length')
-                if remote_size and debug_metadata:
-                    print(f"[DEBUG] Got size from properties dict: {remote_size}")
+                print(f"[DEBUG] FileHash not available, using size comparison")
 
             if remote_size is None:
-                # If we still can't get size, log detailed info
+                # If we still can't get size, assume file needs update
                 if is_debug_enabled():
                     print(f"[!] Cannot determine remote file size for: {sanitized_name}")
-                print(f"[DEBUG] Object type: {type(existing_file).__name__}")
-                print(f"[DEBUG] Object attributes: {[attr for attr in dir(existing_file) if not attr.startswith('_')][:20]}...")
-                return True, True, existing_file, local_hash
+                return True, True, None, local_hash
 
             # Compare file sizes only (hash comparison not available)
             if upload_stats_dict:
@@ -558,12 +425,10 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
                 if is_debug_enabled():
                     print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
 
-            return needs_update, True, existing_file, local_hash
-        else:
-            # Item exists but it's not a file or folder we can identify
-            if is_debug_enabled():
-                print(f"[?] Unable to determine type of existing item: {sanitized_name}")
-            return True, False, None, local_hash
+            return needs_update, True, None, local_hash
+
+        # Should not reach here, but return safe default
+        return True, file_exists, None, local_hash
 
     except Exception as e:
         # File doesn't exist in SharePoint (404 error is expected)
@@ -641,7 +506,7 @@ def calculate_hashes_parallel(file_paths, max_workers=None):
     return results
 
 
-def check_files_need_update_parallel(drive, file_list, site_url, list_name,
+def check_files_need_update_parallel(file_list, site_url, list_name,
                                      filehash_available, tenant_id, client_id,
                                      client_secret, login_endpoint, graph_endpoint,
                                      upload_stats_dict, max_workers=10):
@@ -652,7 +517,6 @@ def check_files_need_update_parallel(drive, file_list, site_url, list_name,
     Particularly useful when processing large numbers of files.
 
     Args:
-        drive (DriveItem): SharePoint folder to check
         file_list (list): List of file paths to check
         site_url (str): SharePoint site URL
         list_name (str): SharePoint library name
@@ -670,7 +534,7 @@ def check_files_need_update_parallel(drive, file_list, site_url, list_name,
 
     Example:
         check_results = check_files_need_update_parallel(
-        ...     drive, files, site_url, lib_name, True, ...
+        ...     files, site_url, lib_name, True, ...
         ... )
         files_to_upload = [f for f, (needs_update, _, _, _) in check_results.items() if needs_update]
 
@@ -694,7 +558,7 @@ def check_files_need_update_parallel(drive, file_list, site_url, list_name,
         file_name = os.path.basename(file_path)
 
         result = check_file_needs_update(
-            drive, file_path, file_name, site_url, list_name,
+            file_path, file_name, site_url, list_name,
             filehash_available, tenant_id, client_id, client_secret,
             login_endpoint, graph_endpoint, stats_wrapper
         )

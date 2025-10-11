@@ -9,7 +9,6 @@ list item operations, and request retry logic.
 import time
 import requests
 from dotenv import load_dotenv
-from office365.graph_client import GraphClient
 from .auth import acquire_token
 from .monitoring import rate_monitor
 from .utils import is_debug_metadata_enabled, is_debug_enabled
@@ -20,8 +19,11 @@ load_dotenv()
 # Global cache for column mappings
 column_mapping_cache = {}
 
+# Global cache for site/drive IDs (used by deletion operations)
+site_drive_id_cache = {}
 
-def make_graph_request_with_retry(url, headers, method='GET', json_data=None, params=None, max_retries=3):
+
+def make_graph_request_with_retry(url, headers, method='GET', json_data=None, data=None, params=None, max_retries=3):
     """
     Make a Graph API request with proper retry-after handling for 429 responses.
     Includes rate limiting monitoring via response header analysis.
@@ -29,8 +31,9 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, pa
     Args:
         url (str): The Graph API endpoint URL
         headers (dict): Request headers including Authorization
-        method (str): HTTP method ('GET', 'POST', 'PATCH', etc.)
-        json_data (dict): JSON data for POST/PATCH requests
+        method (str): HTTP method ('GET', 'POST', 'PATCH', 'PUT', 'DELETE', etc.)
+        json_data (dict): JSON data for POST/PATCH requests (mutually exclusive with data)
+        data (bytes): Binary data for PUT/POST requests (mutually exclusive with json_data)
         params (dict): URL parameters for GET requests
         max_retries (int): Maximum number of retry attempts
 
@@ -39,6 +42,9 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, pa
 
     Raises:
         Exception: If all retries are exhausted or non-retryable error occurs
+
+    Note:
+        Use json_data for JSON requests or data for binary uploads, not both.
     """
     debug_metadata = is_debug_metadata_enabled()
 
@@ -55,9 +61,19 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, pa
             if method.upper() == 'GET':
                 response = requests.get(url, headers=headers, params=params)
             elif method.upper() == 'POST':
-                response = requests.post(url, headers=headers, json=json_data)
+                if data is not None:
+                    response = requests.post(url, headers=headers, data=data)
+                else:
+                    response = requests.post(url, headers=headers, json=json_data)
             elif method.upper() == 'PATCH':
                 response = requests.patch(url, headers=headers, json=json_data)
+            elif method.upper() == 'PUT':
+                if data is not None:
+                    response = requests.put(url, headers=headers, data=data)
+                else:
+                    response = requests.put(url, headers=headers, json=json_data)
+            elif method.upper() == 'DELETE':
+                response = requests.delete(url, headers=headers)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -1087,9 +1103,9 @@ def comprehensive_column_verification(site_id, list_id, token, graph_endpoint, c
             print(f"Enforce Unique: {column_analysis['enforce_unique']}")
 
             if 'text_properties' in column_analysis:
-                text_props = column_analysis['text_properties']
-                print(f"Max Length: {text_props['max_length']}")
-                print(f"Multiple Lines: {text_props['allow_multiple_lines']}")
+                text_props = column_analysis.get('text_properties', {})
+                print(f"Max Length: {text_props.get('max_length', 'N/A')}")
+                print(f"Multiple Lines: {text_props.get('allow_multiple_lines', 'N/A')}")
 
             print(f"Accessible: {column_analysis['accessible']}")
 
@@ -1195,42 +1211,44 @@ def verify_column_for_filehash_operations(site_id, list_id, token, graph_endpoin
 
 def create_graph_client(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
     """
-    Create and configure GraphClient instance for SharePoint access.
+    DEPRECATED: This function is no longer used as of v4.0.0.
+
+    The action now uses direct Graph REST API calls instead of Office365-REST-Python-Client.
+    Use get_drive_item_by_path() to get SharePoint resources directly.
 
     Args:
-        tenant_id (str): Azure AD tenant ID
-        client_id (str): App registration client ID
-        client_secret (str): App registration client secret
-        login_endpoint (str): Azure AD endpoint
-        graph_endpoint (str): Graph API endpoint
+        tenant_id: Not used (deprecated)
+        client_id: Not used (deprecated)
+        client_secret: Not used (deprecated)
+        login_endpoint: Not used (deprecated)
+        graph_endpoint: Not used (deprecated)
 
-    Returns:
-        GraphClient: Configured GraphClient instance
+    Raises:
+        NotImplementedError: Always raises as this function is deprecated
     """
-    token_result = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
-
-    if 'access_token' not in token_result:
-        raise Exception(f"Failed to acquire access token: {token_result.get('error_description', 'Unknown error')}")
-
-    client = GraphClient(lambda: token_result)
-
-    # Apply endpoint rewriting if needed
-    if graph_endpoint != "graph.microsoft.com":
-        # Create a wrapper that passes graph_endpoint to rewrite_endpoint
-        def rewrite_wrapper(request):
-            return rewrite_endpoint(request, graph_endpoint)
-        client.before_execute(rewrite_wrapper, False)
-
-    return client
+    # Parameters intentionally unused - function is deprecated
+    _ = (tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+    raise NotImplementedError(
+        "create_graph_client() is deprecated as of v4.0.0. "
+        "Use direct Graph REST API functions like get_drive_item_by_path() instead. "
+        "The Office365-REST-Python-Client library has been removed."
+    )
 
 
-def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
+def list_files_in_folder_recursive(drive, folder_path, site_url, tenant_id, client_id,
+                                   client_secret, login_endpoint, graph_endpoint, current_path=""):
     """
-    Recursively list all files in a SharePoint folder.
+    Recursively list all files in a SharePoint folder using direct Graph REST API.
 
     Args:
         drive: Office365 Drive object representing the folder
-        folder_path (str): The original folder path being synced (for reference)
+        folder_path (str): The original folder path being synced
+        site_url (str): SharePoint site URL
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
         current_path (str): Current relative path within the folder structure
 
     Returns:
@@ -1239,56 +1257,145 @@ def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
             - path (str): Relative path from root folder
             - id (str): SharePoint item ID
             - size (int): File size in bytes
-            - drive_item: The DriveItem object for deletion
+            - drive_item: The DriveItem object for deletion (None for Graph API)
 
     Note:
-        This function traverses the folder structure recursively to find all files
-        in the sync target folder and its subfolders.
+        Uses direct Graph REST API calls instead of Office365 library property detection
+        to reliably distinguish between files and folders.
     """
     files = []
     debug_enabled = is_debug_enabled()
 
     try:
-        # Get all children in the current folder
-        children = drive.children.get().select(["name", "file", "folder", "size", "id"]).execute_query()
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            raise Exception("Failed to acquire authentication token")
+
+        # Get site and drive IDs if this is the first call
+        if not current_path:
+            # Parse site URL to get site ID
+            # Format: https://tenant.sharepoint.com/sites/sitename
+            import urllib.parse
+            parsed = urllib.parse.urlparse(site_url)
+            hostname = parsed.netloc
+            site_path = parsed.path
+
+            # Get site ID
+            site_id_url = f"https://{graph_endpoint}/v1.0/sites/{hostname}:{site_path}"
+            headers = {
+                'Authorization': f"Bearer {token['access_token']}",
+                'Accept': 'application/json'
+            }
+            site_response = make_graph_request_with_retry(site_id_url, headers, method='GET')
+
+            if site_response.status_code != 200:
+                raise Exception(f"Failed to get site ID: {site_response.status_code} - {site_response.text}")
+
+            site_data = site_response.json()
+            site_id = site_data['id']
+
+            if debug_enabled:
+                print(f"[DEBUG] Site ID: {site_id}")
+
+            # Get default drive ID
+            drive_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drive"
+            drive_response = make_graph_request_with_retry(drive_url, headers, method='GET')
+
+            if drive_response.status_code != 200:
+                raise Exception(f"Failed to get drive: {drive_response.status_code} - {drive_response.text}")
+
+            drive_data = drive_response.json()
+            drive_id = drive_data['id']
+
+            if debug_enabled:
+                print(f"[DEBUG] Drive ID: {drive_id}")
+
+            # Get the folder item by path
+            # URL encode the folder path
+            encoded_path = urllib.parse.quote(folder_path.strip('/'))
+            folder_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/root:/{encoded_path}"
+            folder_response = make_graph_request_with_retry(folder_url, headers, method='GET')
+
+            if folder_response.status_code != 200:
+                raise Exception(f"Failed to get folder: {folder_response.status_code} - {folder_response.text}")
+
+            folder_data = folder_response.json()
+            folder_item_id = folder_data['id']
+
+            if debug_enabled:
+                print(f"[DEBUG] Folder item ID: {folder_item_id}")
+
+            # Store these for recursive calls in global cache
+            site_drive_id_cache['site_id'] = site_id
+            site_drive_id_cache['drive_id'] = drive_id
+            site_drive_id_cache['current_item_id'] = folder_item_id
+        else:
+            # Use stored IDs from parent call
+            site_id = site_drive_id_cache.get('site_id')
+            drive_id = site_drive_id_cache.get('drive_id')
+            folder_item_id = site_drive_id_cache.get('current_item_id')
+
+        # Get children of the current folder using Graph API
+        children_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{folder_item_id}/children"
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Accept': 'application/json'
+        }
+
+        children_response = make_graph_request_with_retry(children_url, headers, method='GET')
+
+        if children_response.status_code != 200:
+            raise Exception(f"Failed to list children: {children_response.status_code} - {children_response.text}")
+
+        children_data = children_response.json()
+        children = children_data.get('value', [])
 
         if debug_enabled and not current_path:
-            # Only show this message for the root folder
             print(f"\n[DEBUG] SharePoint folder contains {len(children)} items")
 
         for child in children:
             # Build the relative path for this item
-            item_path = f"{current_path}/{child.name}" if current_path else child.name
+            item_name = child.get('name', '')
+            item_path = f"{current_path}/{item_name}" if current_path else item_name
 
-            # Debug: Show what type of item this is
-            has_file = hasattr(child, 'file') and child.file is not None
-            has_folder = hasattr(child, 'folder') and child.folder is not None
+            # Check if this item has a 'file' or 'folder' facet in the JSON
+            has_file = 'file' in child
+            has_folder = 'folder' in child
 
             if debug_enabled:
                 item_type = "FILE" if has_file else ("FOLDER" if has_folder else "UNKNOWN")
                 print(f"[DEBUG] SharePoint item: {item_path} (type: {item_type})")
 
-            # Check if this is a file
+            # If it's a file, add to list
             if has_file:
                 file_info = {
-                    'name': child.name,
+                    'name': item_name,
                     'path': item_path,
-                    'id': child.id,
-                    'size': child.size if hasattr(child, 'size') else 0,
-                    'drive_item': child
+                    'id': child.get('id', ''),
+                    'size': child.get('size', 0),
+                    'drive_item': None  # Graph API doesn't use Office365 drive_item objects
                 }
                 files.append(file_info)
 
                 if debug_enabled:
                     print(f"  [+] Added to file list: {item_path} ({file_info['size']} bytes)")
 
-            # Check if this is a folder - recurse into it
+            # If it's a folder, recurse into it
             elif has_folder:
                 if debug_enabled:
                     print(f"  [→] Entering subfolder: {item_path}")
 
+                # Store the child item ID for the recursive call
+                child_item_id = child.get('id', '')
+                list_files_in_folder_recursive._current_item_id = child_item_id
+
                 # Recursively get files from this subfolder
-                subfolder_files = list_files_in_folder_recursive(child, folder_path, item_path)
+                subfolder_files = list_files_in_folder_recursive(
+                    drive, folder_path, site_url, tenant_id, client_id,
+                    client_secret, login_endpoint, graph_endpoint, item_path
+                )
                 files.extend(subfolder_files)
 
                 if debug_enabled:
@@ -1313,23 +1420,39 @@ def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
     return files
 
 
-def delete_file_from_sharepoint(drive_item, file_path, whatif=False):
+def delete_file_from_sharepoint(drive_item, file_path, whatif=False, file_id=None,
+                               site_url=None, tenant_id=None, client_id=None,
+                               client_secret=None, login_endpoint=None, graph_endpoint=None):
     """
     Delete a file from SharePoint.
 
     Args:
-        drive_item: Office365 DriveItem object representing the file to delete
+        drive_item: Office365 DriveItem object representing the file to delete (or None for Graph API)
         file_path (str): Relative path of the file (for logging)
         whatif (bool): If True, simulate deletion without actually deleting (default: False)
+        file_id (str): SharePoint item ID for Graph API deletion (required if drive_item is None)
+        site_url (str): SharePoint site URL (required if drive_item is None)
+        tenant_id (str): Azure AD tenant ID (required if drive_item is None)
+        client_id (str): Azure AD application client ID (required if drive_item is None)
+        client_secret (str): Azure AD application client secret (required if drive_item is None)
+        login_endpoint (str): Azure AD login endpoint (required if drive_item is None)
+        graph_endpoint (str): Microsoft Graph API endpoint (required if drive_item is None)
 
     Returns:
         bool: True if deletion successful (or would be successful in whatif mode), False otherwise
 
     Note:
-        This function uses the Office365 REST Python Client library to delete
-        the file. It provides detailed logging in debug mode. WhatIf mode allows
-        users to preview what would be deleted without actually performing deletions.
+        Supports two modes:
+        1. Office365 library (drive_item provided) - legacy mode
+        2. Direct Graph API (drive_item=None, file_id provided) - new mode
+        WhatIf mode allows users to preview deletions without actually performing them.
+
+        site_url parameter is not used in Graph API mode (uses cached site_id/drive_id instead)
+        but kept in signature for API compatibility.
     """
+    # site_url intentionally unused - we use cached site_id/drive_id from global cache
+    _ = site_url
+
     debug_enabled = is_debug_enabled()
 
     try:
@@ -1344,8 +1467,37 @@ def delete_file_from_sharepoint(drive_item, file_path, whatif=False):
             if debug_enabled:
                 print(f"[×] Deleting file from SharePoint: {file_path}")
 
-            # Delete the file using the DriveItem's delete method
-            drive_item.delete_object().execute_query()
+            # Check which deletion method to use
+            if drive_item is None:
+                # Use Graph API deletion
+                if not file_id:
+                    raise Exception("file_id is required for Graph API deletion")
+
+                # Get authentication token
+                from .auth import acquire_token
+                token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+                if not token:
+                    raise Exception("Failed to acquire authentication token")
+
+                # Use stored site and drive IDs from global cache (set by list_files_in_folder_recursive)
+                site_id = site_drive_id_cache.get('site_id')
+                drive_id = site_drive_id_cache.get('drive_id')
+
+                # Delete the file using Graph API
+                delete_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{file_id}"
+                headers = {
+                    'Authorization': f"Bearer {token['access_token']}",
+                    'Accept': 'application/json'
+                }
+
+                delete_response = make_graph_request_with_retry(delete_url, headers, method='DELETE')
+
+                if delete_response.status_code not in [200, 204]:
+                    raise Exception(f"Failed to delete file: {delete_response.status_code} - {delete_response.text}")
+
+            else:
+                # Use Office365 library deletion (legacy mode)
+                drive_item.delete_object().execute_query()
 
             # Always show simple deletion message
             print(f"File Deleted: {file_path}")
@@ -1362,6 +1514,436 @@ def delete_file_from_sharepoint(drive_item, file_path, whatif=False):
             import traceback
             print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         return False
+
+
+def get_drive_item_by_path(site_url, folder_path, tenant_id, client_id,
+                           client_secret, login_endpoint, graph_endpoint):
+    """
+    Get a drive item (file or folder) by its path using Graph API.
+
+    Args:
+        site_url (str): SharePoint site URL
+        folder_path (str): Path to the item (e.g., 'Documents/Folder1/file.txt')
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
+
+    Returns:
+        dict: Drive item metadata including:
+            - id: Item ID
+            - name: Item name
+            - size: Item size
+            - webUrl: Web URL
+            - (and other driveItem properties)
+        None: If item not found or error occurred
+
+    Example:
+        item = get_drive_item_by_path(site_url, 'Documents/Reports', ...)
+        item_id = item['id']
+    """
+    debug_enabled = is_debug_enabled()
+
+    try:
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            raise Exception("Failed to acquire authentication token")
+
+        # Parse site URL to get site ID
+        import urllib.parse
+        parsed = urllib.parse.urlparse(site_url)
+        hostname = parsed.netloc
+        site_path = parsed.path
+
+        # Get site ID
+        site_id_url = f"https://{graph_endpoint}/v1.0/sites/{hostname}:{site_path}"
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Accept': 'application/json'
+        }
+        site_response = make_graph_request_with_retry(site_id_url, headers, method='GET')
+
+        if site_response.status_code != 200:
+            raise Exception(f"Failed to get site ID: {site_response.status_code}")
+
+        site_data = site_response.json()
+        site_id = site_data['id']
+
+        # Get default drive ID
+        drive_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drive"
+        drive_response = make_graph_request_with_retry(drive_url, headers, method='GET')
+
+        if drive_response.status_code != 200:
+            raise Exception(f"Failed to get drive: {drive_response.status_code}")
+
+        drive_data = drive_response.json()
+        drive_id = drive_data['id']
+
+        # Get the item by path
+        encoded_path = urllib.parse.quote(folder_path.strip('/'))
+        item_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/root:/{encoded_path}"
+
+        item_response = make_graph_request_with_retry(item_url, headers, method='GET')
+
+        if item_response.status_code == 200:
+            item_data = item_response.json()
+            # Store IDs for other functions to use
+            item_data['_site_id'] = site_id
+            item_data['_drive_id'] = drive_id
+            return item_data
+        elif item_response.status_code == 404:
+            if debug_enabled:
+                print(f"[!] Item not found: {folder_path}")
+            return None
+        else:
+            raise Exception(f"Failed to get item: {item_response.status_code} - {item_response.text}")
+
+    except Exception as e:
+        print(f"[!] Error getting drive item by path: {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return None
+
+
+def upload_small_file_graph(site_id, drive_id, parent_item_id, filename, file_content,
+                            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
+    """
+    Upload a small file (<250 MB) using Graph API.
+
+    Args:
+        site_id (str): SharePoint site ID
+        drive_id (str): SharePoint drive ID
+        parent_item_id (str): Parent folder item ID
+        filename (str): Name for the uploaded file
+        file_content (bytes): File content as bytes
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
+
+    Returns:
+        dict: Uploaded drive item metadata
+        None: If upload failed
+
+    Note:
+        This method only supports files up to 250 MB in size.
+        For larger files, use create_upload_session_graph().
+    """
+    debug_enabled = is_debug_enabled()
+
+    try:
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            raise Exception("Failed to acquire authentication token")
+
+        # URL encode the filename
+        import urllib.parse
+        encoded_filename = urllib.parse.quote(filename)
+
+        # Upload endpoint: PUT /items/{parent-id}:/{filename}:/content
+        upload_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{parent_item_id}:/{encoded_filename}:/content"
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Content-Type': 'application/octet-stream'
+        }
+
+        if debug_enabled:
+            print(f"[DEBUG] Uploading to: {upload_url}")
+            print(f"[DEBUG] File size: {len(file_content)} bytes")
+
+        # Make the upload request (use data parameter for binary content)
+        upload_response = make_graph_request_with_retry(upload_url, headers, method='PUT', data=file_content)
+
+        if upload_response.status_code in [200, 201]:
+            item_data = upload_response.json()
+            if debug_enabled:
+                print(f"[DEBUG] Upload successful: {item_data.get('id')}")
+            return item_data
+        else:
+            raise Exception(f"Upload failed: {upload_response.status_code} - {upload_response.text}")
+
+    except Exception as e:
+        print(f"[!] Error uploading small file: {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return None
+
+
+def create_upload_session_graph(site_id, drive_id, parent_item_id, filename,
+                                tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
+    """
+    Create an upload session for large files (>250 MB) using Graph API.
+
+    Args:
+        site_id (str): SharePoint site ID
+        drive_id (str): SharePoint drive ID
+        parent_item_id (str): Parent folder item ID
+        filename (str): Name for the uploaded file
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
+
+    Returns:
+        dict: Upload session info including:
+            - uploadUrl: URL for uploading chunks
+            - expirationDateTime: Session expiration
+        None: If session creation failed
+
+    Note:
+        Use upload_file_chunk_graph() to upload chunks to the returned uploadUrl.
+    """
+    debug_enabled = is_debug_enabled()
+
+    try:
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            raise Exception("Failed to acquire authentication token")
+
+        # URL encode the filename
+        import urllib.parse
+        encoded_filename = urllib.parse.quote(filename)
+
+        # Create upload session endpoint
+        session_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{parent_item_id}:/{encoded_filename}:/createUploadSession"
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+
+        # Request body with conflict behavior
+        request_body = {
+            "item": {
+                "@microsoft.graph.conflictBehavior": "replace"
+            }
+        }
+
+        if debug_enabled:
+            print(f"[DEBUG] Creating upload session: {session_url}")
+
+        session_response = make_graph_request_with_retry(session_url, headers, method='POST', json_data=request_body)
+
+        if session_response.status_code == 200:
+            session_data = session_response.json()
+            if debug_enabled:
+                print(f"[DEBUG] Upload session created: {session_data.get('uploadUrl')[:50]}...")
+            return session_data
+        else:
+            raise Exception(f"Session creation failed: {session_response.status_code} - {session_response.text}")
+
+    except Exception as e:
+        print(f"[!] Error creating upload session: {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return None
+
+
+def upload_file_chunk_graph(upload_url, chunk_data, chunk_start, chunk_end, total_size):
+    """
+    Upload a chunk of a file to an upload session using Graph API.
+
+    Args:
+        upload_url (str): Upload URL from create_upload_session_graph()
+        chunk_data (bytes): Chunk content as bytes
+        chunk_start (int): Starting byte position (0-indexed)
+        chunk_end (int): Ending byte position (inclusive)
+        total_size (int): Total file size in bytes
+
+    Returns:
+        dict: Upload response:
+            - If chunk accepted: Status info with nextExpectedRanges
+            - If upload complete: Full driveItem metadata
+        None: If upload failed
+
+    Note:
+        - Chunk sizes must be multiples of 320 KiB (327,680 bytes)
+        - Maximum 60 MiB per chunk
+        - Content-Range format: "bytes {start}-{end}/{total}"
+    """
+    debug_enabled = is_debug_enabled()
+
+    try:
+        import requests
+
+        headers = {
+            'Content-Length': str(len(chunk_data)),
+            'Content-Range': f"bytes {chunk_start}-{chunk_end}/{total_size}"
+        }
+
+        if debug_enabled:
+            print(f"[DEBUG] Uploading chunk: bytes {chunk_start}-{chunk_end}/{total_size}")
+
+        # Use requests directly (no retry for chunks per MS documentation)
+        response = requests.put(upload_url, headers=headers, data=chunk_data, timeout=300)
+
+        # Check response
+        if response.status_code in [200, 201, 202]:
+            # 202 = chunk accepted, more chunks expected
+            # 200/201 = upload complete
+            response_data = response.json() if response.content else {}
+            if debug_enabled:
+                if response.status_code == 202:
+                    print(f"[DEBUG] Chunk accepted, continuing...")
+                else:
+                    print(f"[DEBUG] Upload complete!")
+            return response_data
+        else:
+            raise Exception(f"Chunk upload failed: {response.status_code} - {response.text}")
+
+    except Exception as e:
+        print(f"[!] Error uploading chunk: {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return None
+
+
+def create_folder_graph(site_id, drive_id, parent_item_id, folder_name,
+                       tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
+    """
+    Create a folder in SharePoint using Graph API.
+
+    Args:
+        site_id (str): SharePoint site ID
+        drive_id (str): SharePoint drive ID
+        parent_item_id (str): Parent folder item ID where new folder will be created
+        folder_name (str): Name for the new folder
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
+
+    Returns:
+        dict: Created folder driveItem metadata including:
+            - id: Folder item ID
+            - name: Folder name
+            - folder: Folder properties
+        None: If folder creation failed
+
+    Note:
+        If a folder with the same name exists, this will automatically
+        rename the new folder (e.g., "Folder" -> "Folder 1").
+    """
+    debug_enabled = is_debug_enabled()
+
+    try:
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            raise Exception("Failed to acquire authentication token")
+
+        # Create folder endpoint: POST /items/{parent-id}/children
+        create_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{parent_item_id}/children"
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Content-Type': 'application/json'
+        }
+
+        # Request body
+        request_body = {
+            "name": folder_name,
+            "folder": {},
+            "@microsoft.graph.conflictBehavior": "rename"
+        }
+
+        if debug_enabled:
+            print(f"[DEBUG] Creating folder: {folder_name} in parent {parent_item_id}")
+
+        create_response = make_graph_request_with_retry(create_url, headers, method='POST', json_data=request_body)
+
+        if create_response.status_code in [200, 201]:
+            folder_data = create_response.json()
+            if debug_enabled:
+                print(f"[DEBUG] Folder created: {folder_data.get('id')}")
+            return folder_data
+        else:
+            raise Exception(f"Folder creation failed: {create_response.status_code} - {create_response.text}")
+
+    except Exception as e:
+        print(f"[!] Error creating folder: {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return None
+
+
+def list_folder_children_graph(site_id, drive_id, item_id, tenant_id, client_id,
+                               client_secret, login_endpoint, graph_endpoint):
+    """
+    List all children (files and folders) in a folder using Graph API.
+
+    Args:
+        site_id (str): SharePoint site ID
+        drive_id (str): SharePoint drive ID
+        item_id (str): Folder item ID to list children of
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
+
+    Returns:
+        list: List of driveItem dictionaries, each with:
+            - id: Item ID
+            - name: Item name
+            - file: File facet (if file)
+            - folder: Folder facet (if folder)
+        None: If listing failed
+
+    Note:
+        Use 'file' in item or 'folder' in item to determine type.
+    """
+    debug_enabled = is_debug_enabled()
+
+    try:
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            raise Exception("Failed to acquire authentication token")
+
+        # List children endpoint
+        children_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{item_id}/children"
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Accept': 'application/json'
+        }
+
+        children_response = make_graph_request_with_retry(children_url, headers, method='GET')
+
+        if children_response.status_code == 200:
+            children_data = children_response.json()
+            children = children_data.get('value', [])
+            if debug_enabled:
+                print(f"[DEBUG] Found {len(children)} children in folder {item_id}")
+            return children
+        else:
+            raise Exception(f"List children failed: {children_response.status_code} - {children_response.text}")
+
+    except Exception as e:
+        print(f"[!] Error listing folder children: {str(e)}")
+        if is_debug_metadata_enabled():
+            import traceback
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        return None
 
 
 def batch_update_filehash_fields(site_url, list_name, updates_list,

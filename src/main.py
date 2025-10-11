@@ -286,18 +286,14 @@ VERSION:
 import sys
 import os
 import glob
-import tempfile
-import time
 
 # SharePoint sync modules
 from sharepoint_sync.config import parse_config
 from sharepoint_sync.graph_api import (
-    create_graph_client, check_and_create_filehash_column, get_sharepoint_list_item_by_filename,
+    get_drive_item_by_path, check_and_create_filehash_column,
     list_files_in_folder_recursive, delete_file_from_sharepoint
 )
-from sharepoint_sync.file_handler import should_exclude_path, calculate_file_hash, sanitize_path_components
-from sharepoint_sync.uploader import upload_file_with_structure, upload_file, ensure_folder_exists
-from sharepoint_sync.markdown_converter import convert_markdown_to_html
+from sharepoint_sync.file_handler import should_exclude_path
 from sharepoint_sync.monitoring import upload_stats, print_rate_limiting_summary
 from sharepoint_sync.utils import is_debug_enabled
 from sharepoint_sync.parallel_uploader import ParallelUploader
@@ -522,14 +518,13 @@ def get_library_name_from_path(upload_path):
 # SYNC DELETION - Remove orphaned files from SharePoint
 # ====================================================================
 
-def identify_files_to_delete(sharepoint_files, local_files_set, base_path):
+def identify_files_to_delete(sharepoint_files, local_files_set):
     """
     Identify SharePoint files that should be deleted (not in local sync set).
 
     Args:
         sharepoint_files (list): List of file dicts from SharePoint (from list_files_in_folder_recursive)
         local_files_set (set): Set of relative file paths from local sync set
-        base_path (str): Base path used for folder structure
 
     Returns:
         list: List of file dicts that should be deleted
@@ -567,12 +562,11 @@ def identify_files_to_delete(sharepoint_files, local_files_set, base_path):
     return files_to_delete
 
 
-def perform_sync_deletion(root_drive, local_files, base_path, config):
+def perform_sync_deletion(local_files, base_path, config):
     """
     Delete files from SharePoint that are not in the local sync set.
 
     Args:
-        root_drive: SharePoint Drive object representing the upload folder
         local_files (list): List of local file paths being synced
         base_path (str): Base path for maintaining folder structure
         config: Configuration object
@@ -591,7 +585,16 @@ def perform_sync_deletion(root_drive, local_files, base_path, config):
     # Step 1: List all files currently in SharePoint folder
     print("\n[*] Listing files in SharePoint target folder...")
     try:
-        sharepoint_files = list_files_in_folder_recursive(root_drive, config.upload_path)
+        sharepoint_files = list_files_in_folder_recursive(
+            None,  # drive parameter not used - function uses Graph REST API
+            config.upload_path,
+            config.tenant_url,
+            config.tenant_id,
+            config.client_id,
+            config.client_secret,
+            config.login_endpoint,
+            config.graph_endpoint
+        )
         print(f"[OK] Found {len(sharepoint_files)} files in SharePoint")
     except Exception as e:
         print(f"[!] Failed to list SharePoint files: {str(e)}")
@@ -641,7 +644,7 @@ def perform_sync_deletion(root_drive, local_files, base_path, config):
         print(f"[DEBUG] SharePoint returned {len(sharepoint_files)} items")
 
     # Step 3: Identify files to delete
-    files_to_delete = identify_files_to_delete(sharepoint_files, local_files_set, base_path)
+    files_to_delete = identify_files_to_delete(sharepoint_files, local_files_set)
 
     if not files_to_delete:
         print("[OK] No orphaned files to delete from SharePoint")
@@ -659,7 +662,14 @@ def perform_sync_deletion(root_drive, local_files, base_path, config):
             success = delete_file_from_sharepoint(
                 file_info['drive_item'],
                 file_info['path'],
-                whatif=config.sync_delete_whatif
+                whatif=config.sync_delete_whatif,
+                file_id=file_info['id'],
+                site_url=config.tenant_url,
+                tenant_id=config.tenant_id,
+                client_id=config.client_id,
+                client_secret=config.client_secret,
+                login_endpoint=config.login_endpoint,
+                graph_endpoint=config.graph_endpoint
             )
             if success:
                 deleted_count += 1
@@ -752,19 +762,32 @@ def main():
     # Calculate base path for maintaining folder structure
     base_path = calculate_base_path(local_files, local_dirs)
 
-    # Create Graph client and connect to SharePoint
+    # Connect to SharePoint using Graph API
     print("[*] Connecting to SharePoint...")
     try:
-        client = create_graph_client(
+        # Get drive item using Graph REST API
+        root_item = get_drive_item_by_path(
+            config.tenant_url, config.upload_path,
             config.tenant_id, config.client_id, config.client_secret,
             config.login_endpoint, config.graph_endpoint
         )
-        root_drive = client.sites.get_by_url(config.tenant_url).drive.root.get_by_path(config.upload_path)
 
-        # Execute the query to test connection and permissions
-        # This also initializes the root_drive object for use
-        root_drive.get().execute_query()
+        if not root_item:
+            raise Exception(f"Could not find folder at path: {config.upload_path}")
+
+        # Extract site_id, drive_id, and item_id for use throughout the session
+        site_id = root_item.get('_site_id')
+        drive_id = root_item.get('_drive_id')
+        root_item_id = root_item.get('id')
+
+        if not all([site_id, drive_id, root_item_id]):
+            raise Exception("Failed to get SharePoint IDs from path lookup")
+
         print(f"[✓] Connected to SharePoint at: {config.upload_path}")
+        if is_debug_enabled():
+            print(f"[DEBUG] Site ID: {site_id}")
+            print(f"[DEBUG] Drive ID: {drive_id}")
+            print(f"[DEBUG] Root item ID: {root_item_id}")
 
         # Check and create FileHash column if needed
         library_name = get_library_name_from_path(config.upload_path)
@@ -807,7 +830,9 @@ def main():
     # Process all files in parallel
     failed_count = parallel_uploader.process_files(
         local_files,
-        root_drive,
+        site_id,
+        drive_id,
+        root_item_id,
         base_path,
         config,
         filehash_column_available,
@@ -817,7 +842,7 @@ def main():
 
     # Perform sync deletion if enabled
     if config.sync_delete:
-        perform_sync_deletion(root_drive, local_files, base_path, config)
+        perform_sync_deletion(local_files, base_path, config)
 
     # Print final summary report
     # Pass whatif mode status for proper deletion statistics labeling

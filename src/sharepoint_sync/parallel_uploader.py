@@ -72,14 +72,16 @@ class ParallelUploader:
         # Queue for batch metadata updates
         self.metadata_queue = BatchQueue(batch_size=20) if self.batch_metadata else None
 
-    def process_files(self, local_files, root_drive, base_path, config,
+    def process_files(self, local_files, site_id, drive_id, root_item_id, base_path, config,
                      filehash_available, library_name, converted_md_files_set=None):
         """
         Process and upload files in parallel.
 
         Args:
             local_files (list): List of local file paths to process
-            root_drive: SharePoint Drive object
+            site_id (str): SharePoint site ID
+            drive_id (str): SharePoint drive ID
+            root_item_id (str): Root folder item ID
             base_path (str): Base path for folder structure
             config: Configuration object
             filehash_available (bool): Whether FileHash column exists
@@ -108,7 +110,7 @@ class ParallelUploader:
                 print(f"[MD] Processing {len(md_files)} markdown files...")
 
             failed_count += self._process_markdown_files_parallel(
-                md_files, root_drive, base_path, config,
+                md_files, site_id, drive_id, root_item_id, base_path, config,
                 filehash_available, library_name
             )
 
@@ -118,7 +120,7 @@ class ParallelUploader:
                 print(f"[→] Uploading {len(regular_files)} files in parallel (workers: {self.max_workers})...")
 
             failed_count += self._upload_files_parallel(
-                regular_files, root_drive, base_path, config,
+                regular_files, site_id, drive_id, root_item_id, base_path, config,
                 filehash_available, library_name
             )
 
@@ -133,7 +135,7 @@ class ParallelUploader:
 
         return failed_count
 
-    def _upload_files_parallel(self, file_list, root_drive, base_path, config,
+    def _upload_files_parallel(self, file_list, site_id, drive_id, root_item_id, base_path, config,
                                filehash_available, library_name):
         """
         Upload regular files in parallel.
@@ -151,7 +153,7 @@ class ParallelUploader:
             try:
                 # Call existing upload function - maintains all output/statistics
                 upload_file_with_structure(
-                    root_drive, filepath, base_path,
+                    site_id, drive_id, root_item_id, filepath, base_path,
                     config.tenant_url, library_name,
                     4*1024*1024,  # 4MB chunk size
                     config.force_upload,
@@ -197,7 +199,7 @@ class ParallelUploader:
 
         return failed_count
 
-    def _process_markdown_files_parallel(self, md_files, root_drive, base_path,
+    def _process_markdown_files_parallel(self, md_files, site_id, drive_id, root_item_id, base_path,
                                         config, filehash_available, library_name):
         """
         Process markdown files in parallel (conversion + upload).
@@ -213,7 +215,7 @@ class ParallelUploader:
 
             try:
                 md_success = self._process_single_markdown_file(
-                    md_filepath, root_drive, base_path, config,
+                    md_filepath, site_id, drive_id, root_item_id, base_path, config,
                     filehash_available, library_name
                 )
                 if md_success:
@@ -243,7 +245,7 @@ class ParallelUploader:
 
         return failed_count
 
-    def _process_single_markdown_file(self, file_path, root_drive, base_path,
+    def _process_single_markdown_file(self, file_path, site_id, drive_id, root_item_id, base_path,
                                       config, filehash_available, library_name):
         """
         Process single markdown file (convert + upload).
@@ -292,9 +294,13 @@ class ParallelUploader:
             # Determine target folder
             if dir_path and dir_path != "." and dir_path != "":
                 from .uploader import ensure_folder_exists
-                target_folder = ensure_folder_exists(root_drive, dir_path)
+                target_folder_id = ensure_folder_exists(
+                    site_id, drive_id, root_item_id, dir_path,
+                    config.tenant_id, config.client_id, config.client_secret,
+                    config.login_endpoint, config.graph_endpoint
+                )
             else:
-                target_folder = root_drive
+                target_folder_id = root_item_id
 
             desired_html_filename = os.path.basename(original_html_path)
 
@@ -302,7 +308,7 @@ class ParallelUploader:
             for i in range(config.max_retry):
                 try:
                     upload_file(
-                        target_folder, html_path, 4*1024*1024, config.force_upload,
+                        site_id, drive_id, target_folder_id, html_path, 4*1024*1024, config.force_upload,
                         config.tenant_url, library_name, filehash_available,
                         config.tenant_id, config.client_id, config.client_secret,
                         config.login_endpoint, config.graph_endpoint,
@@ -329,7 +335,7 @@ class ParallelUploader:
             # Fall back to uploading raw markdown
             try:
                 upload_file_with_structure(
-                    root_drive, file_path, base_path, config.tenant_url, library_name,
+                    site_id, drive_id, root_item_id, file_path, base_path, config.tenant_url, library_name,
                     4*1024*1024, config.force_upload, filehash_available,
                     config.tenant_id, config.client_id, config.client_secret,
                     config.login_endpoint, config.graph_endpoint,
