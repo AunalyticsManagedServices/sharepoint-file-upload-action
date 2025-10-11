@@ -591,22 +591,6 @@ The action automatically sanitizes Mermaid diagrams to fix common syntax issues 
 | HTML tags (except `<br>`) | Removed | Only `<br>` is supported for line breaks |
 | Curly braces in comments | Removed | Confuses the Mermaid renderer |
 
-**Example - Before Sanitization:**
-```mermaid
-graph LR
-    A[Start: 100%] --> B{Check #1}
-    B -->|"Yes"| C[end Process]
-    C --> D[<span>Complete</span>]
-```
-
-**Example - After Automatic Sanitization:**
-```mermaid
-graph LR
-    A[Start: 100&#37;] --> B{Check &#35;1}
-    B -->|'Yes'| C[End Process]
-    C --> D[Complete]
-```
-
 This sanitization happens automatically during conversion - no action required on your part!
 
 ### Filename Sanitization
