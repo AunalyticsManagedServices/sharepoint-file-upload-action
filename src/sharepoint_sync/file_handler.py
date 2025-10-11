@@ -453,12 +453,16 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
                             print(f"[#] Remote hash: {remote_hash[:8]}... for {sanitized_name}")
 
                         # Compare hashes - this is the most reliable comparison
+                        if upload_stats_dict:
+                            upload_stats_dict['compared_by_hash'] = upload_stats_dict.get('compared_by_hash', 0) + 1
+
                         if local_hash and local_hash == remote_hash:
                             if is_debug_enabled():
                                 print(f"[=] File unchanged (hash match): {sanitized_name}")
                             if upload_stats_dict:
                                 upload_stats_dict['skipped_files'] += 1
                                 upload_stats_dict['bytes_skipped'] += local_size
+                                upload_stats_dict['hash_matched'] = upload_stats_dict.get('hash_matched', 0) + 1
                             return False, True, existing_file, local_hash
                         elif local_hash:
                             if is_debug_enabled():
@@ -538,6 +542,9 @@ def check_file_needs_update(drive, local_path, file_name, site_url, list_name, f
                 return True, True, existing_file, local_hash
 
             # Compare file sizes only (hash comparison not available)
+            if upload_stats_dict:
+                upload_stats_dict['compared_by_size'] = upload_stats_dict.get('compared_by_size', 0) + 1
+
             size_matches = (local_size == remote_size)
             needs_update = not size_matches
 

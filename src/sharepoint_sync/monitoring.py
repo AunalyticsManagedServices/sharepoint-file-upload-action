@@ -169,7 +169,15 @@ class UploadStatistics:
             'failed_files': 0,
             'deleted_files': 0,
             'bytes_uploaded': 0,
-            'bytes_skipped': 0
+            'bytes_skipped': 0,
+            # File comparison method statistics
+            'compared_by_hash': 0,
+            'compared_by_size': 0,
+            # FileHash column operation statistics
+            'hash_new_saved': 0,      # New files with hash saved
+            'hash_updated': 0,         # Existing files with hash updated
+            'hash_matched': 0,         # Files skipped due to hash match
+            'hash_save_failed': 0      # Failed to save hash to SharePoint
         }
 
     def print_summary(self, total_files, whatif_mode=False):
@@ -194,6 +202,25 @@ class UploadStatistics:
 
         print(f"   - Failed uploads:           {self.stats['failed_files']:>6}")
         print(f"   - Total files processed:    {total_files:>6}")
+
+        # File comparison method statistics
+        total_comparisons = self.stats['compared_by_hash'] + self.stats['compared_by_size']
+        if total_comparisons > 0:
+            print(f"\n[COMPARE] File Comparison Methods:")
+            print(f"   - Compared by hash:         {self.stats['compared_by_hash']:>6} ({self.stats['compared_by_hash']/total_comparisons*100:.1f}%)")
+            print(f"   - Compared by size:         {self.stats['compared_by_size']:>6} ({self.stats['compared_by_size']/total_comparisons*100:.1f}%)")
+
+        # FileHash column operation statistics
+        total_hash_ops = (self.stats['hash_new_saved'] + self.stats['hash_updated'] +
+                         self.stats['hash_matched'] + self.stats['hash_save_failed'])
+        if total_hash_ops > 0:
+            print(f"\n[HASH] FileHash Column Statistics:")
+            print(f"   - New hashes saved:         {self.stats['hash_new_saved']:>6}")
+            print(f"   - Hashes updated:           {self.stats['hash_updated']:>6}")
+            print(f"   - Hash matches (skipped):   {self.stats['hash_matched']:>6}")
+            if self.stats['hash_save_failed'] > 0:
+                print(f"   - Hash save failures:       {self.stats['hash_save_failed']:>6}")
+
         print(f"\n[DATA] Transfer Summary:")
         print(f"   - Data uploaded:   {format_bytes(self.stats['bytes_uploaded'])}")
         print(f"   - Data skipped:    {format_bytes(self.stats['bytes_skipped'])}")

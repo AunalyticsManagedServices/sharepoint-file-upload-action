@@ -752,7 +752,14 @@ def identify_files_to_delete(sharepoint_files, local_files_set, base_path):
     debug_enabled = is_debug_enabled()
 
     if debug_enabled:
-        print(f"\n[=] Comparing {len(sharepoint_files)} SharePoint files with {len(local_files_set)} local files...")
+        print(f"\n[DEBUG] Comparing {len(sharepoint_files)} SharePoint files with {len(local_files_set)} local files...")
+        print(f"[DEBUG] SharePoint files:")
+        for sp_file in sharepoint_files:
+            print(f"  [SP] {sp_file['path']}")
+        print(f"\n[DEBUG] Local files set:")
+        for local_path in sorted(local_files_set):
+            print(f"  [LOCAL] {local_path}")
+        print(f"\n[DEBUG] Starting comparison...")
 
     for sp_file in sharepoint_files:
         # The path in SharePoint (relative to upload folder)
@@ -763,7 +770,9 @@ def identify_files_to_delete(sharepoint_files, local_files_set, base_path):
             files_to_delete.append(sp_file)
 
             if debug_enabled:
-                print(f"[×] File marked for deletion: {sp_path} (not in local sync set)")
+                print(f"  [×] ORPHANED: {sp_path} (not in local sync set)")
+        elif debug_enabled:
+            print(f"  [✓] MATCHED: {sp_path}")
 
     return files_to_delete
 
@@ -802,6 +811,9 @@ def perform_sync_deletion(root_drive, local_files, base_path, config):
     # Need to calculate the relative paths the same way upload does
     local_files_set = set()
 
+    if debug_enabled:
+        print(f"\n[DEBUG] Building local file set (base_path: {base_path})...")
+
     for local_file in local_files:
         # Calculate relative path from base_path
         if base_path and os.path.isabs(local_file):
@@ -824,7 +836,11 @@ def perform_sync_deletion(root_drive, local_files, base_path, config):
         local_files_set.add(rel_path)
 
         if debug_enabled:
-            print(f"[=] Local file: {rel_path}")
+            print(f"  [+] Local: {rel_path}")
+
+    if debug_enabled:
+        print(f"\n[DEBUG] Local files set contains {len(local_files_set)} items")
+        print(f"[DEBUG] SharePoint returned {len(sharepoint_files)} items")
 
     # Step 3: Identify files to delete
     files_to_delete = identify_files_to_delete(sharepoint_files, local_files_set, base_path)

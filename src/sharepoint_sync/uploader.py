@@ -644,15 +644,24 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
                         if is_debug_enabled():
                             print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
 
+                        # Track hash save statistics
+                        if is_file_update:
+                            upload_stats_dict['hash_updated'] = upload_stats_dict.get('hash_updated', 0) + 1
+                        else:
+                            upload_stats_dict['hash_new_saved'] = upload_stats_dict.get('hash_new_saved', 0) + 1
+
                     else:
                         if is_debug_enabled():
                             print(f"[!] Failed to set FileHash metadata via REST API")
+                        upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
                 else:
                     if is_debug_enabled():
                         print(f"[!] Could not find list item for uploaded file to set hash metadata")
+                    upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
 
             except Exception as hash_error:
                 print(f"[!] Could not set FileHash metadata via REST API: {str(hash_error)[:200]}")
+                upload_stats_dict['hash_save_failed'] = upload_stats_dict.get('hash_save_failed', 0) + 1
                 # Continue anyway - file is uploaded successfully
 
     except Exception as e:

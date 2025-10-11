@@ -528,7 +528,12 @@ The action uses **xxHash128** for lightning-fast change detection:
 - ⚡ Typically skips 60-90% of files
 - 💾 Saves bandwidth and time
 - 🎯 More reliable than timestamps (especially in Docker/CI)
-- 📊 Detailed statistics show savings
+- 📊 Detailed statistics show comparison methods and hash operations
+
+**Statistics Tracked:**
+- **Comparison Methods**: Shows how many files were compared using hash vs size
+- **FileHash Operations**: Tracks new hashes saved, hashes updated, and hash matches
+- **Efficiency Metrics**: Displays bandwidth saved and skip rate
 
 **Example Output:**
 ```
@@ -549,11 +554,19 @@ Processing files...
    - Files skipped (unchanged):   569
    - Total files processed:       953
 
+[COMPARE] File Comparison Methods:
+   - Compared by hash:            682 (71.7%)
+   - Compared by size:            271 (28.3%)
+
+[HASH] FileHash Column Statistics:
+   - New hashes saved:            255
+   - Hashes updated:              129
+   - Hash matches (skipped):      569
+
 [DATA] Transfer Summary:
    - Data uploaded:   93.7 MB
    - Data skipped:    177.5 MB (569 files not re-uploaded)
-
-[EFFICIENCY] 59.7% of files already up-to-date
+   - Sync efficiency: 65.4% (bandwidth saved by smart sync)
 ============================================================
 ```
 
@@ -683,6 +696,30 @@ File Deleted: archive/notes.txt
 ⚠️ **Important:** Always test with WhatIf first. Deleted files may be in SharePoint recycle bin (depends on configuration).
 
 💡 **Best Practice:** Use in scheduled workflows for automated cleanup.
+
+#### 🔍 Troubleshooting Sync Deletion
+
+If sync deletion is marking unexpected files for deletion, enable **DEBUG mode** to see detailed comparison:
+
+```yaml
+- name: Sync with Debug Output
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  with:
+    # ... your parameters
+    sync_delete: true
+    sync_delete_whatif: true
+  env:
+    DEBUG: "true"  # Enable detailed debug logging
+```
+
+**Debug output shows:**
+- Full list of SharePoint files found
+- Full list of local files in sync set
+- Path-by-path comparison results
+- Whether items are files or folders
+- Exact reason each file is orphaned or matched
+
+This helps diagnose path mismatches, folder structure issues, or markdown conversion problems.
 
 ### Filename Sanitization
 

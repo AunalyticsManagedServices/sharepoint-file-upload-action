@@ -1256,8 +1256,16 @@ def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
             # Build the relative path for this item
             item_path = f"{current_path}/{child.name}" if current_path else child.name
 
+            # Debug: Show what type of item this is
+            has_file = hasattr(child, 'file') and child.file is not None
+            has_folder = hasattr(child, 'folder') and child.folder is not None
+
+            if debug_enabled:
+                item_type = "FILE" if has_file else ("FOLDER" if has_folder else "UNKNOWN")
+                print(f"[DEBUG] SharePoint item: {item_path} (type: {item_type})")
+
             # Check if this is a file
-            if hasattr(child, 'file') and child.file is not None:
+            if has_file:
                 file_info = {
                     'name': child.name,
                     'path': item_path,
@@ -1268,16 +1276,22 @@ def list_files_in_folder_recursive(drive, folder_path="", current_path=""):
                 files.append(file_info)
 
                 if debug_enabled:
-                    print(f"[=] Found file in SharePoint: {item_path} ({file_info['size']} bytes)")
+                    print(f"  [+] Added to file list: {item_path} ({file_info['size']} bytes)")
 
             # Check if this is a folder - recurse into it
-            elif hasattr(child, 'folder') and child.folder is not None:
+            elif has_folder:
                 if debug_enabled:
-                    print(f"[=] Entering subfolder: {item_path}")
+                    print(f"  [→] Entering subfolder: {item_path}")
 
                 # Recursively get files from this subfolder
                 subfolder_files = list_files_in_folder_recursive(child, folder_path, item_path)
                 files.extend(subfolder_files)
+
+                if debug_enabled:
+                    print(f"  [←] Exited subfolder: {item_path} (found {len(subfolder_files)} files)")
+            else:
+                if debug_enabled:
+                    print(f"  [!] WARNING: Item is neither file nor folder: {item_path}")
 
     except Exception as e:
         print(f"[!] Error listing files in folder '{current_path}': {str(e)}")
