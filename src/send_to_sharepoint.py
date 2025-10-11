@@ -14,7 +14,176 @@ SYNOPSIS:
                                  <client_id> <client_secret> <upload_path>
                                  <file_path> [max_retry] [login_endpoint]
                                  [graph_endpoint] [recursive] [force_upload]
-                                 [convert_md_to_html]
+                                 [convert_md_to_html] [exclude_patterns]
+
+PARAMETERS:
+    Required Parameters:
+    -------------------
+    <site_name>
+        SharePoint site name from your site URL.
+        Example: For 'https://company.sharepoint.com/sites/TeamSite', use 'TeamSite'
+        Type: String
+        Position: 1
+
+    <sharepoint_host>
+        SharePoint tenant domain name.
+        Example: 'company.sharepoint.com' or 'company-my.sharepoint.com'
+        For GovCloud: 'company.sharepoint.us'
+        Type: String (FQDN)
+        Position: 2
+
+    <tenant_id>
+        Azure AD tenant ID (GUID format).
+        Find in Azure Portal → Azure Active Directory → Properties → Tenant ID
+        Example: '12345678-1234-1234-1234-123456789abc'
+        Type: String (GUID)
+        Position: 3
+
+    <client_id>
+        Azure AD App Registration application (client) ID.
+        Find in Azure Portal → App Registrations → Your App → Application ID
+        Requires Sites.ReadWrite.All (or Sites.Manage.All for column creation)
+        Example: '87654321-4321-4321-4321-cba987654321'
+        Type: String (GUID)
+        Position: 4
+
+    <client_secret>
+        Azure AD App Registration client secret value.
+        Create in Azure Portal → App Registrations → Certificates & secrets
+        WARNING: Keep this secure! Never commit to version control.
+        Store in GitHub Secrets or environment variables.
+        Type: String (sensitive)
+        Position: 5
+
+    <upload_path>
+        Target path in SharePoint document library where files will be uploaded.
+        Format: 'LibraryName/Folder/Subfolder' (use forward slashes)
+        Example: 'Documents/Reports/2024' or 'Shared Documents/Archive'
+        Creates missing folders automatically.
+        Type: String (path)
+        Position: 6
+
+    <file_path>
+        Local file or glob pattern to upload.
+        Supports wildcards: *, ?, [seq], [!seq]
+
+        Path Separators:
+            - Forward slashes (/) recommended for cross-platform compatibility
+            - Backslashes (\\) work on Windows (use double backslash or raw strings)
+            - Both absolute and relative paths supported
+
+        Examples:
+            Unix/Cross-platform style:
+                - '*.pdf' (all PDFs in current directory)
+                - 'docs/**/*.md' (all markdown files, requires recursive=True)
+                - 'report.xlsx' (single file)
+                - './build/artifacts/*' (all files in artifacts folder)
+
+            Windows style:
+                - '*.pdf' (all PDFs in current directory)
+                - 'docs\\**\\*.md' (all markdown files recursively)
+                - 'C:\\Reports\\*.xlsx' (absolute Windows path)
+                - '.\\build\\artifacts\\*' (relative Windows path)
+
+        Type: String (file path or glob pattern)
+        Position: 7
+
+    Optional Parameters:
+    -------------------
+    [max_retry]
+        Maximum number of retry attempts for failed uploads.
+        Default: 3
+        Range: 0-10 (0 = no retries)
+        Applies to network errors, timeouts, and transient server errors (5xx).
+        Type: Integer
+        Position: 8
+
+    [login_endpoint]
+        Azure AD authentication endpoint for special cloud environments.
+        Default: 'login.microsoftonline.com' (Commercial Cloud)
+        Other options:
+            - 'login.microsoftonline.us' (US Government Cloud)
+            - 'login.microsoftonline.de' (Germany Cloud)
+            - 'login.chinacloudapi.cn' (China Cloud)
+        Type: String (FQDN)
+        Position: 9
+
+    [graph_endpoint]
+        Microsoft Graph API endpoint for special cloud environments.
+        Default: 'graph.microsoft.com' (Commercial Cloud)
+        Other options:
+            - 'graph.microsoft.us' (US Government Cloud)
+            - 'graph.microsoft.de' (Germany Cloud)
+            - 'microsoftgraph.chinacloudapi.cn' (China Cloud)
+        Type: String (FQDN)
+        Position: 10
+
+    [recursive]
+        Enable recursive file matching for glob patterns with '**'.
+        Default: 'False'
+        Values: 'True' or 'False' (case-sensitive string)
+        When True, patterns like 'docs/**/*.md' match files in all subdirectories.
+        When False, only matches files in the specified directory.
+        Type: String ('True'/'False')
+        Position: 11
+
+    [force_upload]
+        Force upload all files, skipping hash/size comparison.
+        Default: 'False'
+        Values: 'True' or 'False' (case-sensitive string)
+        When True, uploads all files regardless of changes (slower, more bandwidth).
+        When False, uses smart sync with xxHash128 comparison (faster, efficient).
+        Use cases: force refresh, corrupted files, testing.
+        Type: String ('True'/'False')
+        Position: 12
+
+    [convert_md_to_html]
+        Convert Markdown (.md) files to HTML with embedded Mermaid SVG diagrams.
+        Default: 'True'
+        Values: 'True' or 'False' (case-sensitive string)
+        When True, converts .md → .html with GitHub-flavored styling and Mermaid rendering.
+        When False, uploads .md files as-is (raw markdown).
+        Requires: Node.js and @mermaid-js/mermaid-cli for diagram conversion.
+        Type: String ('True'/'False')
+        Position: 13
+
+    [exclude_patterns]
+        Comma-separated list of file/directory exclusion patterns.
+        Default: '' (empty string - no exclusions)
+        Format: 'pattern1,pattern2,pattern3' (comma-separated, no spaces around commas)
+
+        Pattern Types:
+            - Wildcard patterns: '*.tmp', '*.log', '*.pyc'
+            - Directory names: '__pycache__', '.git', 'node_modules', '.svn'
+            - Extension only: 'tmp', 'log' (automatically becomes '*.tmp', '*.log')
+            - Specific files: 'config.local.json', 'secrets.txt'
+
+        Pattern Matching:
+            - Matches against filename/directory name (basename)
+            - Matches against full path for precise exclusions
+            - Directory names matched anywhere in path (e.g., '__pycache__' excludes all)
+            - Case-sensitive on Linux, case-insensitive on Windows
+
+        Cross-Platform Compatibility:
+            - Works with both forward slashes (/) and backslashes (\\)
+            - Path normalization ensures consistent matching on all platforms
+
+        Common Use Cases:
+            - Temporary files: '*.tmp,*.bak,*.swp'
+            - Log files: '*.log'
+            - Python artifacts: '*.pyc,__pycache__,.pytest_cache'
+            - Node.js artifacts: 'node_modules,.npm'
+            - Version control: '.git,.svn,.hg'
+            - IDE files: '.vscode,.idea,*.code-workspace'
+            - OS files: '.DS_Store,Thumbs.db,desktop.ini'
+
+        Examples:
+            - Exclude temp files: '*.tmp,*.bak'
+            - Exclude Python cache: '__pycache__,*.pyc'
+            - Exclude multiple types: '*.tmp,*.log,__pycache__,node_modules,.git'
+
+        Type: String (comma-separated patterns)
+        Position: 14
 
 DESCRIPTION:
     - Intelligently syncs files to SharePoint, skipping unchanged files
@@ -27,6 +196,75 @@ DESCRIPTION:
     - Provides detailed statistics on uploads, updates, and skipped files
     - Supports recursive file matching with glob patterns
     - Optional force mode to upload all files regardless of changes
+
+EXAMPLES:
+    1. Upload a single file with defaults:
+       python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Documents/Archive" "report.pdf"
+
+    2. Upload all PDFs with smart sync (skips unchanged):
+       python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Documents/Reports" "*.pdf"
+
+    3. Upload markdown files recursively with conversion to HTML:
+       python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Shared Documents/Docs" "docs/**/*.md" 3 \\
+              login.microsoftonline.com graph.microsoft.com True False True
+
+    4. Force upload all files (skip hash comparison):
+       python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Documents/Backup" "*.xlsx" 5 \\
+              login.microsoftonline.com graph.microsoft.com False True False
+
+    5. US Government Cloud environment:
+       python send_to_sharepoint.py TeamSite company.sharepoint.us \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Documents/Reports" "*.pdf" 3 \\
+              login.microsoftonline.us graph.microsoft.us
+
+    6. Upload build artifacts with custom retry count:
+       python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Documents/Builds/v1.2.3" "./dist/*" 10
+
+    7. Windows absolute path with backslashes:
+       python send_to_sharepoint.py TeamSite company.sharepoint.com ^
+              tenant-guid-here client-guid-here client-secret-here ^
+              "Documents/Reports" "C:\\Users\\Documents\\Reports\\*.xlsx"
+
+    8. Upload all files recursively excluding temporary files:
+       python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Documents/Project" "project/**/*" 3 \\
+              login.microsoftonline.com graph.microsoft.com True False True \\
+              "*.tmp,*.bak,*.log"
+
+    9. Upload Python project excluding cache and compiled files:
+       python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+              tenant-guid-here client-guid-here client-secret-here \\
+              "Documents/Python" "src/**/*" 3 \\
+              login.microsoftonline.com graph.microsoft.com True False False \\
+              "__pycache__,*.pyc,.pytest_cache,.tox"
+
+    10. Upload all files excluding version control and IDE directories:
+        python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+               tenant-guid-here client-guid-here client-secret-here \\
+               "Documents/Source" "./**/*" 3 \\
+               login.microsoftonline.com graph.microsoft.com True False False \\
+               ".git,.svn,.hg,.vscode,.idea,node_modules"
+
+    11. Windows path with exclusions (all files except logs and temps):
+        python send_to_sharepoint.py TeamSite company.sharepoint.com ^
+               tenant-guid-here client-guid-here client-secret-here ^
+               "Documents/Data" "C:\\Projects\\Data\\**\\*" 3 ^
+               login.microsoftonline.com graph.microsoft.com True False False ^
+               "*.log,*.tmp,*.bak,Thumbs.db,.DS_Store"
+
+    Note: On Windows CMD, use ^ for line continuation instead of \\
 
 REQUIREMENTS:
     - Python 3.6 or higher
@@ -49,17 +287,17 @@ VERSION:
 import sys        # Provides access to command-line arguments and exit codes
 import os         # Operating system interface for file/directory operations
 import glob       # Unix-style pathname pattern expansion (e.g., *.txt matches all .txt files)
+import fnmatch    # Unix filename pattern matching (for exclusion filters)
 import time       # Time-related functions for delays and retries
 import tempfile   # Temporary file and directory creation
 import shutil     # High-level file operations (copy, move, etc.)
 import xxhash     # For fast xxHash128 non-cryptographic hashing
-from datetime import datetime  # For HTML generation date/time display
 import requests   # For direct Graph API calls
 
 # Third-party library imports (need to be installed via pip)
 from dotenv import load_dotenv  # Load environment variables from .env file
 import msal       # Microsoft Authentication Library for Azure AD authentication
-import mistune   # Fast markdown parser for converting MD to HTML
+import mistune   # Fast Markdown parser for converting MD to HTML
 import subprocess # For running mermaid-cli to convert diagrams to SVG
 import re        # Regular expressions for pattern matching
 
@@ -111,6 +349,10 @@ force_upload_flag = sys.argv[12] if len(sys.argv) > 12 and sys.argv[12] else "Fa
 # len(sys.argv) > 13 ensures we don't get IndexError if argument doesn't exist
 convert_md_to_html_flag = sys.argv[13] if len(sys.argv) > 13 and sys.argv[13] else "True"
 
+# Check if exclusion patterns are provided
+# len(sys.argv) > 14 ensures we don't get IndexError if argument doesn't exist
+exclude_patterns_arg = sys.argv[14] if len(sys.argv) > 14 and sys.argv[14] else ""
+
 # ====================================================================
 # SHAREPOINT FILENAME SANITIZATION
 # ====================================================================
@@ -120,7 +362,7 @@ def sanitize_sharepoint_name(name, is_folder=False):
     Sanitize file/folder names to be compatible with SharePoint/OneDrive.
 
     SharePoint/OneDrive has strict naming rules:
-    - Cannot contain: # % & * : < > ? / \ | " { } ~
+    - Cannot contain: # % & * : < > ? / \\ | " { } ~
     - Cannot start with: ~ $
     - Cannot end with: . (period)
     - Cannot be reserved names: CON, PRN, AUX, NUL, COM1-9, LPT1-9
@@ -611,6 +853,88 @@ if convert_md_to_html:
 else:
     print("[!] Markdown to HTML conversion disabled - .md files will be uploaded as-is")
 
+# Parse exclusion patterns
+# Split comma-separated patterns and strip whitespace
+exclude_patterns = [pattern.strip() for pattern in exclude_patterns_arg.split(',') if pattern.strip()]
+
+if exclude_patterns:
+    print(f"[=] Exclusion patterns enabled: {', '.join(exclude_patterns)}")
+
+# ====================================================================
+# FILE EXCLUSION FILTERING
+# ====================================================================
+
+def should_exclude_path(path, exclude_patterns):
+    """
+    Check if a file or directory path should be excluded based on exclusion patterns.
+
+    This function provides cross-platform exclusion filtering using fnmatch for
+    pattern matching. It checks both the full path and individual path components
+    (for directory exclusions like '__pycache__' or 'node_modules').
+
+    Args:
+        path (str): File or directory path to check (can be absolute or relative)
+        exclude_patterns (list): List of exclusion patterns (e.g., ['*.tmp', '*.log', '__pycache__'])
+
+    Returns:
+        bool: True if path should be excluded, False otherwise
+
+    Pattern Matching:
+        - Exact filename match: '__pycache__', '.git', 'node_modules'
+        - Wildcard patterns: '*.tmp', '*.log', '*.pyc'
+        - Extension only: 'tmp', 'log' (automatically converts to '*.tmp', '*.log')
+
+    Cross-Platform Compatibility:
+        - Works with both forward slashes (/) and backslashes (\\)
+        - Normalizes paths for consistent matching on Windows and Linux
+        - Case-sensitive on Linux, case-insensitive on Windows
+
+    Examples:
+        >>> should_exclude_path('file.tmp', ['*.tmp'])
+        True
+        >>> should_exclude_path('src/__pycache__/module.pyc', ['__pycache__'])
+        True
+        >>> should_exclude_path('docs/report.pdf', ['*.tmp', '*.log'])
+        False
+    """
+    if not exclude_patterns:
+        return False
+
+    # Normalize path separators for cross-platform compatibility
+    # Convert backslashes to forward slashes for consistent handling
+    normalized_path = path.replace('\\', '/')
+
+    # Get the basename (filename or directory name)
+    basename = os.path.basename(normalized_path)
+
+    # Split path into components for directory matching
+    # This allows matching directory names anywhere in the path
+    path_components = normalized_path.split('/')
+
+    for pattern in exclude_patterns:
+        # Match against basename (most common case)
+        # This handles patterns like '*.tmp', '__pycache__', 'file.log'
+        if fnmatch.fnmatch(basename, pattern):
+            return True
+
+        # If pattern doesn't contain wildcards, check if it matches any path component
+        # This allows excluding directories like '__pycache__' or 'node_modules' anywhere in path
+        if '*' not in pattern and '?' not in pattern and '[' not in pattern:
+            if pattern in path_components:
+                return True
+
+        # Check if pattern matches full path (for more specific exclusions)
+        if fnmatch.fnmatch(normalized_path, pattern):
+            return True
+
+        # Auto-add wildcard for extension-only patterns (e.g., 'tmp' -> '*.tmp')
+        if not pattern.startswith('*') and not pattern.startswith('.'):
+            wildcard_pattern = f'*.{pattern}'
+            if fnmatch.fnmatch(basename, wildcard_pattern):
+                return True
+
+    return False
+
 # ====================================================================
 # FILE DISCOVERY - Finding files to upload
 # ====================================================================
@@ -618,11 +942,24 @@ else:
 # Use glob to find all files/directories matching the pattern
 # glob.glob() returns a list of paths matching a pathname pattern
 # Examples: '*.txt' finds all .txt files, '**/*.py' finds all .py files recursively
-local_items = glob.glob(file_path, recursive=recursive)
+local_items_unfiltered = glob.glob(file_path, recursive=recursive)
+
+# Apply exclusion filters if provided
+if exclude_patterns:
+    local_items = [item for item in local_items_unfiltered if not should_exclude_path(item, exclude_patterns)]
+    excluded_count = len(local_items_unfiltered) - len(local_items)
+    if excluded_count > 0:
+        print(f"[=] Excluded {excluded_count} item(s) matching exclusion patterns")
+else:
+    local_items = local_items_unfiltered
 
 # Exit with error if no matches found
 if not local_items:
-    print(f"[Error] No files or directories matched pattern: {file_path}")
+    if exclude_patterns and local_items_unfiltered:
+        print(f"[Error] All files matched by pattern '{file_path}' were excluded by filters")
+        print(f"[Error] {len(local_items_unfiltered)} file(s) found but all matched exclusion patterns: {', '.join(exclude_patterns)}")
+    else:
+        print(f"[Error] No files or directories matched pattern: {file_path}")
     sys.exit(1)  # Exit code 1 indicates error to calling process (e.g., GitHub Actions)
 
 # ====================================================================
@@ -699,6 +1036,429 @@ def acquire_token():
 
     return token
 
+# ====================================================================
+# RATE LIMITING MONITOR CLASS
+# ====================================================================
+
+class RateLimitMonitor:
+    """
+    Monitor and track Graph API rate limiting metrics.
+
+    Analyzes response headers to detect and track throttling:
+    - x-ms-throttle-limit-percentage: Utilization percentage (0.8-1.8 range)
+    - x-ms-resource-unit: Resource units consumed per request
+    - x-ms-throttle-scope: Throttling scope details
+
+    Headers only appear when >80% of limit consumed.
+    """
+
+    def __init__(self):
+        """Initialize rate limit monitoring metrics"""
+        self.metrics = {
+            'total_requests': 0,
+            'throttled_requests': 0,
+            'average_throttle_percentage': 0.0,
+            'max_throttle_percentage': 0.0,
+            'resource_units_consumed': 0,
+            'alerts_triggered': 0
+        }
+        self.throttle_threshold = 0.8  # Alert when >80% of limit
+
+    def analyze_response_headers(self, response):
+        """
+        Analyze Graph API response headers for rate limiting info.
+
+        Args:
+            response: requests.Response object from Graph API call
+
+        Returns:
+            dict: Rate limiting information extracted from headers
+        """
+        self.metrics['total_requests'] += 1
+
+        headers = response.headers
+        throttle_percentage = headers.get('x-ms-throttle-limit-percentage')
+        resource_unit = headers.get('x-ms-resource-unit')
+        throttle_scope = headers.get('x-ms-throttle-scope')
+
+        if throttle_percentage:
+            percentage = float(throttle_percentage)
+            self.metrics['max_throttle_percentage'] = max(
+                self.metrics['max_throttle_percentage'],
+                percentage
+            )
+
+            # Calculate running average
+            current_avg = self.metrics['average_throttle_percentage']
+            total_requests = self.metrics['total_requests']
+            self.metrics['average_throttle_percentage'] = (
+                ((current_avg * (total_requests - 1)) + percentage) / total_requests
+            )
+
+            if percentage >= 1.0:
+                self.metrics['throttled_requests'] += 1
+                print(f"[!] THROTTLING DETECTED: {percentage:.1%} of limit used")
+
+                if throttle_scope:
+                    print(f"[!] Throttle scope: {throttle_scope}")
+
+            elif percentage >= self.throttle_threshold:
+                self.metrics['alerts_triggered'] += 1
+                print(f"[⚠] Rate limit warning: {percentage:.1%} of limit used")
+
+        if resource_unit:
+            units = int(resource_unit)
+            self.metrics['resource_units_consumed'] += units
+            # Only print if debug mode is enabled
+            debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+            if debug_metadata:
+                print(f"[=] Resource units consumed: {units}")
+
+        return {
+            'throttle_percentage': float(throttle_percentage) if throttle_percentage else None,
+            'resource_unit': int(resource_unit) if resource_unit else None,
+            'throttle_scope': throttle_scope,
+            'is_throttled': response.status_code == 429
+        }
+
+    def get_metrics_summary(self):
+        """
+        Get comprehensive rate limiting metrics.
+
+        Returns:
+            dict: Summary of all rate limiting metrics
+        """
+        return {
+            'total_requests': self.metrics['total_requests'],
+            'throttled_requests': self.metrics['throttled_requests'],
+            'throttle_rate': self.metrics['throttled_requests'] / max(self.metrics['total_requests'], 1),
+            'average_throttle_percentage': self.metrics['average_throttle_percentage'],
+            'max_throttle_percentage': self.metrics['max_throttle_percentage'],
+            'resource_units_consumed': self.metrics['resource_units_consumed'],
+            'alerts_triggered': self.metrics['alerts_triggered']
+        }
+
+    def should_slow_down(self):
+        """
+        Determine if requests should be slowed down proactively.
+
+        Returns:
+            bool: True if approaching rate limits (>90% utilization)
+        """
+        return self.metrics['max_throttle_percentage'] >= 0.9
+
+
+# Global rate limit monitor instance
+rate_monitor = RateLimitMonitor()
+
+def print_rate_limiting_summary():
+    """
+    Print comprehensive rate limiting statistics collected during execution.
+
+    Displays:
+    - Total API requests made
+    - Number of throttled requests
+    - Average and maximum throttle percentages
+    - Resource units consumed
+    - Alerts triggered
+
+    Color-coded status based on throttling severity.
+    """
+    metrics = rate_monitor.get_metrics_summary()
+
+    print("\n" + "="*60)
+    print("GRAPH API RATE LIMITING SUMMARY")
+    print("="*60)
+    print(f"[STATS] API Request Statistics:")
+    print(f"   - Total API Requests:       {metrics['total_requests']:>6}")
+    print(f"   - Throttled Requests:       {metrics['throttled_requests']:>6} ({metrics['throttle_rate']:.1%})")
+    print(f"   - Average Throttle %:       {metrics['average_throttle_percentage']:>6.1%}")
+    print(f"   - Max Throttle %:           {metrics['max_throttle_percentage']:>6.1%}")
+    print(f"   - Resource Units Used:      {metrics['resource_units_consumed']:>6}")
+    print(f"   - Alerts Triggered:         {metrics['alerts_triggered']:>6}")
+
+    # Status indicator based on throttling severity
+    if metrics['max_throttle_percentage'] >= 1.0:
+        print(f"\n[!] WARNING: Hit throttling limits during execution")
+    elif metrics['max_throttle_percentage'] >= 0.8:
+        print(f"\n[⚠] CAUTION: Approached throttling limits")
+    else:
+        print(f"\n[OK] Stayed within throttling limits")
+    print("="*60)
+
+def make_graph_request_with_retry(url, headers, method='GET', json_data=None, params=None, max_retries=3):
+    """
+    Make a Graph API request with proper retry-after handling for 429 responses.
+    Includes rate limiting monitoring via response header analysis.
+
+    Args:
+        url (str): The Graph API endpoint URL
+        headers (dict): Request headers including Authorization
+        method (str): HTTP method ('GET', 'POST', 'PATCH', etc.)
+        json_data (dict): JSON data for POST/PATCH requests
+        params (dict): URL parameters for GET requests
+        max_retries (int): Maximum number of retry attempts
+
+    Returns:
+        requests.Response: The HTTP response object
+
+    Raises:
+        Exception: If all retries are exhausted or non-retryable error occurs
+    """
+    debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
+    for attempt in range(max_retries + 1):
+        try:
+            # Add proactive delay if approaching rate limits
+            if rate_monitor.should_slow_down() and attempt > 0:
+                delay = 2 ** attempt
+                print(f"[⚠] Proactive rate limiting delay: {delay}s")
+                time.sleep(delay)
+
+            # Make the request based on method
+            if method.upper() == 'GET':
+                response = requests.get(url, headers=headers, params=params)
+            elif method.upper() == 'POST':
+                response = requests.post(url, headers=headers, json=json_data)
+            elif method.upper() == 'PATCH':
+                response = requests.patch(url, headers=headers, json=json_data)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            # Analyze response headers for rate limiting info
+            rate_info = rate_monitor.analyze_response_headers(response)
+
+            # Check for rate limiting (429) or server errors (5xx)
+            if response.status_code == 429:
+                # Get retry-after header value
+                retry_after = response.headers.get('Retry-After', '60')
+                try:
+                    wait_seconds = int(retry_after)
+                except ValueError:
+                    wait_seconds = 60  # Default to 60 seconds if header is malformed
+
+                if attempt < max_retries:
+                    print(f"[!] Rate limited (429). Waiting {wait_seconds} seconds before retry {attempt + 1}/{max_retries}...")
+                    if debug_metadata:
+                        print(f"[DEBUG] Retry-After header: {retry_after}")
+                        print(f"[DEBUG] Rate limit response: {response.text[:300]}")
+                    time.sleep(wait_seconds)
+                    continue
+                else:
+                    print(f"[!] Rate limiting exhausted all retries. Final 429 response:")
+                    print(f"[DEBUG] {response.text[:500]}")
+                    raise Exception(f"Graph API rate limiting: {response.status_code} after {max_retries} retries")
+
+            elif 500 <= response.status_code < 600:
+                # Server error - retry with exponential backoff
+                if attempt < max_retries:
+                    wait_seconds = (2 ** attempt) + 1  # 1, 3, 7 seconds
+                    print(f"[!] Server error ({response.status_code}). Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
+                    if debug_metadata:
+                        print(f"[DEBUG] Server error response: {response.text[:300]}")
+                    time.sleep(wait_seconds)
+                    continue
+                else:
+                    print(f"[!] Server errors exhausted all retries. Final response:")
+                    print(f"[DEBUG] {response.text[:500]}")
+                    raise Exception(f"Graph API server error: {response.status_code} after {max_retries} retries")
+
+            # Success or client error (don't retry client errors like 400, 401, 403, 404)
+            return response
+
+        except requests.exceptions.RequestException as e:
+            # Network/connection errors - retry with exponential backoff
+            if attempt < max_retries:
+                wait_seconds = (2 ** attempt) + 1
+                print(f"[!] Network error: {e}. Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
+                time.sleep(wait_seconds)
+                continue
+            else:
+                print(f"[!] Network errors exhausted all retries: {e}")
+                raise
+
+    # Should never reach here, but just in case
+    raise Exception("Unexpected error in make_graph_request_with_retry")
+
+def get_column_internal_name_mapping(site_id, list_id, token):
+    """
+    Get mapping of display names to internal names for all columns in a SharePoint list.
+
+    Args:
+        site_id (str): SharePoint site ID
+        list_id (str): SharePoint list/library ID
+        token (str): OAuth access token
+
+    Returns:
+        dict: Mapping of display names to column metadata including internal names
+              Format: {display_name: {'internal_name': str, 'type': str, 'id': str, 'description': str}}
+
+    Note:
+        Results are cached globally in column_mapping_cache to reduce API calls.
+    """
+    global column_mapping_cache
+
+    # Check cache first
+    cache_key = (site_id, list_id)
+    if cache_key in column_mapping_cache:
+        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+        if debug_metadata:
+            print(f"[=] Using cached column mappings for site/list")
+        return column_mapping_cache[cache_key]
+
+    try:
+        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
+        url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/columns"
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+
+        if debug_metadata:
+            print(f"[=] Fetching column mappings from Graph API...")
+
+        response = make_graph_request_with_retry(url, headers, method='GET')
+
+        if response.status_code == 200:
+            columns = response.json().get('value', [])
+            mapping = {}
+
+            for column in columns:
+                display_name = column.get('displayName', '')
+                internal_name = column.get('name', '')
+                column_type = column.get('columnGroup', 'Unknown')
+
+                mapping[display_name] = {
+                    'internal_name': internal_name,
+                    'type': column_type,
+                    'id': column.get('id', ''),
+                    'description': column.get('description', '')
+                }
+
+                if debug_metadata:
+                    print(f"[=] Column mapping: '{display_name}' -> '{internal_name}' ({column_type})")
+
+            # Cache the result
+            column_mapping_cache[cache_key] = mapping
+
+            if debug_metadata:
+                print(f"[OK] Cached {len(mapping)} column mappings")
+
+            return mapping
+        else:
+            print(f"[!] Failed to get column mapping: {response.status_code}")
+            if debug_metadata:
+                print(f"[DEBUG] Response: {response.text[:500]}")
+            return {}
+
+    except Exception as e:
+        print(f"[!] Error getting column mapping: {e}")
+        return {}
+
+def resolve_field_name(site_id, list_id, token, field_name):
+    """
+    Resolve display name to internal name for reliable field access.
+
+    SharePoint columns have both display names (what users see) and internal names
+    (used by API). This function resolves display names to their internal counterparts.
+
+    Args:
+        site_id (str): SharePoint site ID
+        list_id (str): SharePoint list/library ID
+        token (str): OAuth access token
+        field_name (str): Display name or internal name to resolve
+
+    Returns:
+        str: The internal name for the field, or original name if not resolved
+
+    Note:
+        - Internal names use hex codes for special characters (e.g., '_x0020_' for space)
+        - If field_name already appears to be an internal name, returns it as-is
+        - Falls back to case-insensitive matching if exact match not found
+    """
+    try:
+        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
+        # First check if it's already an internal name by checking for hex encoding
+        if '_x00' in field_name or (not any(c.isupper() for c in field_name) and '_' in field_name):
+            if debug_metadata:
+                print(f"[=] '{field_name}' appears to be internal name (contains hex encoding)")
+            return field_name
+
+        # Get column mapping
+        column_mapping = get_column_internal_name_mapping(site_id, list_id, token)
+
+        # Try exact display name match
+        if field_name in column_mapping:
+            internal_name = column_mapping[field_name]['internal_name']
+            if debug_metadata:
+                print(f"[OK] Resolved '{field_name}' to internal name '{internal_name}'")
+            return internal_name
+
+        # Try case-insensitive match
+        for display_name, details in column_mapping.items():
+            if display_name.lower() == field_name.lower():
+                internal_name = details['internal_name']
+                if debug_metadata:
+                    print(f"[OK] Resolved '{field_name}' to internal name '{internal_name}' (case-insensitive)")
+                return internal_name
+
+        # If no match found, return original name
+        if debug_metadata:
+            print(f"[!] Could not resolve '{field_name}' to internal name, using as-is")
+        return field_name
+
+    except Exception as e:
+        print(f"[!] Error resolving field name: {e}")
+        return field_name
+
+def sanitize_field_name_for_sharepoint(field_name):
+    """
+    Convert display name to expected internal name format by encoding special characters.
+
+    SharePoint internal names encode special characters as hex values (e.g., '_x0020_' for space).
+    This function attempts to convert a display name to its likely internal name format.
+
+    Args:
+        field_name (str): Display name to sanitize
+
+    Returns:
+        str: Sanitized field name with special characters encoded
+
+    Note:
+        This is a fallback mechanism. Prefer using resolve_field_name() with Graph API
+        for accurate internal name resolution.
+
+    Examples:
+        'File Hash' -> 'File_x0020_Hash'
+        'User#ID' -> 'User_x0023_ID'
+        'Value%' -> 'Value_x0025_'
+    """
+    # Handle common special character conversions
+    replacements = {
+        ' ': '_x0020_',
+        '#': '_x0023_',
+        '%': '_x0025_',
+        '&': '_x0026_',
+        '*': '_x002a_',
+        '+': '_x002b_',
+        '/': '_x002f_',
+        ':': '_x003a_',
+        '<': '_x003c_',
+        '>': '_x003e_',
+        '?': '_x003f_',
+        '\\': '_x005c_',
+        '|': '_x007c_'
+    }
+
+    sanitized = field_name
+    for char, replacement in replacements.items():
+        sanitized = sanitized.replace(char, replacement)
+
+    return sanitized
+
 def check_and_create_filehash_column(site_url, list_name):
     """
     Check if FileHash column exists in SharePoint document library and create if needed.
@@ -717,7 +1477,7 @@ def check_and_create_filehash_column(site_url, list_name):
 
     Note:
         Requires Sites.ReadWrite.All or Sites.Manage.All permissions.
-        The column is created as a single line of text with 32 character limit
+        The column is created as a single line of text with 255 character limit
         (exact length of xxHash128 hexadecimal representation).
     """
     try:
@@ -742,7 +1502,7 @@ def check_and_create_filehash_column(site_url, list_name):
 
         # Get site ID first
         site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
-        site_response = requests.get(site_endpoint, headers=headers)
+        site_response = make_graph_request_with_retry(site_endpoint, headers, method='GET')
 
         if site_response.status_code != 200:
             print(f"[!] Failed to get site information: {site_response.status_code}")
@@ -758,7 +1518,7 @@ def check_and_create_filehash_column(site_url, list_name):
 
         # Get the document library (list) ID
         lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
-        lists_response = requests.get(lists_endpoint, headers=headers)
+        lists_response = make_graph_request_with_retry(lists_endpoint, headers, method='GET')
 
         if lists_response.status_code != 200:
             print(f"[!] Failed to get lists: {lists_response.status_code}")
@@ -789,7 +1549,7 @@ def check_and_create_filehash_column(site_url, list_name):
 
         # Check if FileHash column already exists
         columns_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/columns"
-        columns_response = requests.get(columns_endpoint, headers=headers)
+        columns_response = make_graph_request_with_retry(columns_endpoint, headers, method='GET')
 
         if columns_response.status_code != 200:
             print(f"[!] Failed to get columns: {columns_response.status_code}")
@@ -823,15 +1583,16 @@ def check_and_create_filehash_column(site_url, list_name):
                     "allowMultipleLines": False,
                     "appendChangesToExistingText": False,
                     "linesForEditing": 0,
-                    "maxLength": 32  # xxHash128 produces 32-character hex string
+                    "maxLength": 255  # xxHash128 produces 32-character hex string
                 }
             }
 
-            # Create the column
-            create_response = requests.post(
+            # Create the column with retry handling
+            create_response = make_graph_request_with_retry(
                 columns_endpoint,
-                headers=headers,
-                json=column_definition
+                headers,
+                method='POST',
+                json_data=column_definition
             )
 
             if create_response.status_code == 201:
@@ -882,6 +1643,9 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
         dict: List item data with custom columns, or None if not found
     """
     try:
+        # Get debug flag
+        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
         # Get token for Graph API
         token = acquire_token()
 
@@ -900,12 +1664,19 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
         host_name = site_parts[0]
         site_name = site_parts[2] if len(site_parts) > 2 else ''
 
+        if debug_metadata:
+            print(f"[DEBUG] Looking up file: {filename}")
+            print(f"[DEBUG] Site parts: host={host_name}, site={site_name}")
+
         # Get site ID first
         site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
-        site_response = requests.get(site_endpoint, headers=headers)
+        site_response = make_graph_request_with_retry(site_endpoint, headers, method='GET')
 
         if site_response.status_code != 200:
             print(f"[!] Failed to get site information: {site_response.status_code}")
+            if debug_metadata:
+                print(f"[DEBUG] Site endpoint: {site_endpoint}")
+                print(f"[DEBUG] Site response: {site_response.text[:300]}")
             return None
 
         site_data = site_response.json()
@@ -913,27 +1684,68 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
 
         if not site_id:
             print("[!] Could not retrieve site ID")
+            if debug_metadata:
+                print(f"[DEBUG] Site data keys: {list(site_data.keys())}")
             return None
+
+        if debug_metadata:
+            print(f"[DEBUG] Site ID: {site_id}")
 
         # Get the document library (list) ID
         lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
-        lists_response = requests.get(lists_endpoint, headers=headers)
+        lists_response = make_graph_request_with_retry(lists_endpoint, headers, method='GET')
 
         if lists_response.status_code != 200:
             print(f"[!] Failed to get lists: {lists_response.status_code}")
+            if debug_metadata:
+                print(f"[DEBUG] Lists response: {lists_response.text[:300]}")
             return None
 
         lists_data = lists_response.json()
         list_id = None
 
+        if debug_metadata:
+            available_lists = [lst.get('displayName', 'N/A') for lst in lists_data.get('value', [])]
+            print(f"[DEBUG] Available lists: {available_lists}")
+
         for sp_list in lists_data.get('value', []):
             if sp_list.get('displayName') == list_name or sp_list.get('name') == list_name:
                 list_id = sp_list.get('id')
+                if debug_metadata:
+                    print(f"[DEBUG] Found list '{list_name}' with ID: {list_id}")
                 break
 
         if not list_id:
             print(f"[!] Could not find list '{list_name}'")
             return None
+
+        # Check if FileHash column exists in the list before trying to retrieve items
+        if debug_metadata:
+            print(f"[DEBUG] Checking for FileHash column in list...")
+            columns_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/columns"
+            columns_response = make_graph_request_with_retry(columns_endpoint, headers=headers)
+
+            if columns_response.status_code == 200:
+                columns_data = columns_response.json()
+                filehash_column_found = False
+                column_names = []
+
+                for column in columns_data.get('value', []):
+                    col_name = column.get('name', 'N/A')
+                    col_display_name = column.get('displayName', 'N/A')
+                    column_names.append(f"{col_name} ({col_display_name})")
+
+                    if col_name == 'FileHash' or col_display_name == 'FileHash':
+                        filehash_column_found = True
+                        print(f"[DEBUG] ✓ FileHash column found: name='{col_name}', displayName='{col_display_name}'")
+                        print(f"[DEBUG] Column details: {column}")
+
+                if not filehash_column_found:
+                    print(f"[DEBUG] ✗ FileHash column NOT found in list")
+
+                print(f"[DEBUG] Available columns: {column_names[:10]}...")  # Show first 10 columns
+            else:
+                print(f"[DEBUG] Failed to get columns: {columns_response.status_code}")
 
         # Query list items by filename with expanded fields
         # Try filtering by FileLeafRef first, fallback to getting all items if filter fails
@@ -945,42 +1757,78 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename):
             '$filter': f"fields/FileLeafRef eq '{filename}'"
         }
 
-        items_response = requests.get(items_endpoint, headers=headers, params=items_params)
+        if debug_metadata:
+            print(f"[DEBUG] Attempting filtered query for: {filename}")
+            print(f"[DEBUG] Items endpoint: {items_endpoint}")
+
+        items_response = make_graph_request_with_retry(items_endpoint, headers=headers, params=items_params)
 
         if items_response.status_code != 200:
             print(f"[!] Failed to get list items with filter: {items_response.status_code}")
-            print(f"[DEBUG] Filter request URL: {items_response.url}")
-            print(f"[DEBUG] Response: {items_response.text[:200]}")
+            if debug_metadata:
+                print(f"[DEBUG] Filter request URL: {items_response.url}")
+                print(f"[DEBUG] Response: {items_response.text[:500]}")
 
             # Fallback: Get all items and filter in Python
             print(f"[DEBUG] Trying fallback: getting all items and filtering in Python...")
             items_params = {'$expand': 'fields'}
-            items_response = requests.get(items_endpoint, headers=headers, params=items_params)
+            items_response = make_graph_request_with_retry(items_endpoint, headers=headers, params=items_params)
 
             if items_response.status_code != 200:
                 print(f"[!] Failed to get list items (fallback): {items_response.status_code}")
-                print(f"[DEBUG] Fallback response: {items_response.text[:200]}")
+                if debug_metadata:
+                    print(f"[DEBUG] Fallback response: {items_response.text[:500]}")
                 return None
 
         items_data = items_response.json()
         items = items_data.get('value', [])
 
         # Filter items in Python to find matching filename
-        print(f"[DEBUG] Searching through {len(items)} items for '{filename}'")
+        if debug_metadata:
+            print(f"[DEBUG] Searching through {len(items)} items for '{filename}'")
+
         for item in items:
             if 'fields' in item and item['fields']:
                 file_leaf_ref = item['fields'].get('FileLeafRef')
                 if file_leaf_ref == filename:
-                    print(f"[DEBUG] Found matching item: {file_leaf_ref}")
+                    if debug_metadata:
+                        print(f"[DEBUG] ✓ Found matching item: {file_leaf_ref}")
+                        print(f"[DEBUG] Item ID: {item.get('id', 'N/A')}")
+                        print(f"[DEBUG] All available fields in item: {list(item['fields'].keys())}")
+
+                        # Check specifically for FileHash field
+                        filehash_value = item['fields'].get('FileHash')
+                        if filehash_value:
+                            print(f"[DEBUG] ✓ FileHash found in item: {filehash_value}")
+                        else:
+                            print(f"[DEBUG] ✗ FileHash NOT found in item fields")
+
+                        # Show sample of field values for debugging
+                        field_sample = {}
+                        for key, value in list(item['fields'].items())[:5]:  # First 5 fields
+                            field_sample[key] = str(value)[:50] if value else 'None'
+                        print(f"[DEBUG] Sample field values: {field_sample}")
+
                     return item
 
-        print(f"[DEBUG] No matching item found for '{filename}'")
-        if items and len(items) > 0:
-            print(f"[DEBUG] Sample FileLeafRef values: {[item.get('fields', {}).get('FileLeafRef', 'N/A') for item in items[:3]]}")
+        if debug_metadata:
+            print(f"[DEBUG] ✗ No matching item found for '{filename}'")
+            if items and len(items) > 0:
+                sample_names = [item.get('fields', {}).get('FileLeafRef', 'N/A') for item in items[:3]]
+                print(f"[DEBUG] Sample FileLeafRef values from list: {sample_names}")
+
+                # Show what fields are available in the first item
+                if items[0].get('fields'):
+                    sample_fields = list(items[0]['fields'].keys())[:10]
+                    print(f"[DEBUG] Sample fields available in first item: {sample_fields}")
+
         return None
 
     except Exception as e:
-        print(f"[!] Error getting list item by filename: {str(e)[:200]}")
+        print(f"[!] Error getting list item by filename: {str(e)[:400]}")
+        if debug_metadata:
+            import traceback
+            print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
         return None
 
 def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, field_value):
@@ -998,6 +1846,9 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
         bool: True if successful, False otherwise
     """
     try:
+        # Get debug flag
+        debug_metadata = os.environ.get('DEBUG_METADATA', 'false').lower() == 'true'
+
         # Get token for Graph API
         token = acquire_token()
 
@@ -1010,6 +1861,10 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
             'Content-Type': 'application/json'
         }
 
+        # Check for rate limiting headers
+        if debug_metadata:
+            print(f"[DEBUG] Updating field {field_name} = {field_value} for item {item_id}")
+
         # Parse site URL to get site ID
         site_parts = site_url.replace('https://', '').split('/')
         host_name = site_parts[0]
@@ -1017,10 +1872,12 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
 
         # Get site ID first
         site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
-        site_response = requests.get(site_endpoint, headers=headers)
+        site_response = make_graph_request_with_retry(site_endpoint, headers=headers)
 
         if site_response.status_code != 200:
             print(f"[!] Failed to get site information: {site_response.status_code}")
+            if debug_metadata:
+                print(f"[DEBUG] Site response: {site_response.text[:300]}")
             return False
 
         site_data = site_response.json()
@@ -1032,10 +1889,12 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
 
         # Get the document library (list) ID
         lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
-        lists_response = requests.get(lists_endpoint, headers=headers)
+        lists_response = make_graph_request_with_retry(lists_endpoint, headers=headers)
 
         if lists_response.status_code != 200:
             print(f"[!] Failed to get lists: {lists_response.status_code}")
+            if debug_metadata:
+                print(f"[DEBUG] Lists response: {lists_response.text[:300]}")
             return False
 
         lists_data = lists_response.json()
@@ -1050,21 +1909,64 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
             print(f"[!] Could not find list '{list_name}'")
             return False
 
+        # Resolve field name to internal name for reliable API access
+        resolved_field_name = resolve_field_name(site_id, list_id, token['access_token'], field_name)
+
+        if resolved_field_name != field_name and debug_metadata:
+            print(f"[=] Resolved field name '{field_name}' to '{resolved_field_name}'")
+
         # Update the field using PATCH request
         fields_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items/{item_id}/fields"
-        field_data = {field_name: field_value}
+        field_data = {resolved_field_name: field_value}
+
+        if debug_metadata:
+            print(f"[DEBUG] PATCH endpoint: {fields_endpoint}")
+            print(f"[DEBUG] Field data to update: {field_data}")
 
         update_response = requests.patch(fields_endpoint, headers=headers, json=field_data)
 
+        # Check for rate limiting headers in response
+        if debug_metadata:
+            rate_limit_headers = {}
+            for header_name, header_value in update_response.headers.items():
+                if 'rate' in header_name.lower() or 'throttl' in header_name.lower() or 'limit' in header_name.lower():
+                    rate_limit_headers[header_name] = header_value
+            if rate_limit_headers:
+                print(f"[DEBUG] Rate limiting headers: {rate_limit_headers}")
+
         if update_response.status_code == 200:
+            if debug_metadata:
+                print(f"[DEBUG] ✓ Field update successful")
+                # Show updated field data
+                response_data = update_response.json()
+                if field_name in response_data:
+                    print(f"[DEBUG] Confirmed field value: {response_data[field_name]}")
             return True
+        elif update_response.status_code == 429:
+            # Handle throttling specifically
+            retry_after = update_response.headers.get('Retry-After', '60')
+            print(f"[!] Request throttled (429). Should wait {retry_after} seconds before retry")
+            print(f"[DEBUG] Throttling response: {update_response.text[:500]}")
+            return False
         else:
             print(f"[!] Failed to update field: {update_response.status_code}")
             print(f"[DEBUG] Response: {update_response.text[:500]}")
+
+            if debug_metadata:
+                print(f"[DEBUG] Request headers: {dict(headers)}")
+                print(f"[DEBUG] Response headers: {dict(update_response.headers)}")
+
+                # Check if the field name exists
+                if update_response.status_code == 400:
+                    print(f"[DEBUG] Bad request - field '{field_name}' may not exist or have wrong internal name")
+
             return False
 
     except Exception as e:
-        print(f"[!] Error updating list item field: {str(e)[:200]}")
+        print(f"[!] Error updating list item field: {str(e)[:400]}")
+        if debug_metadata:
+            import traceback
+            print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
         return False
 
 # ====================================================================
@@ -1098,6 +2000,10 @@ root_drive = client.sites.get_by_url(tenant_url).drive.root.get_by_path(upload_p
 # Dictionary to cache created folders (avoids redundant API calls)
 # Key: folder path, Value: DriveItem object
 created_folders = {}
+
+# Cache for column internal name mappings (avoids redundant API calls)
+# Key: (site_id, list_id), Value: dict mapping display names to internal names
+column_mapping_cache = {}
 
 # Statistics tracker for upload summary
 # Using a dictionary makes it easy to pass by reference and update from functions
@@ -1135,7 +2041,7 @@ def ensure_folder_exists(parent_drive, folder_path):
 
     Note:
         - Caches created folders to minimize API calls
-        - Handles both forward slash (/) and backslash (\) path separators
+        - Handles both forward slash (/) and backslash (\\) path separators
         - Sanitizes folder names for SharePoint compatibility
         - Compatible with Office365-REST-Python-Client v2.6.2+
     """
@@ -2291,6 +3197,9 @@ if total_processed > 0:
     print(f"\n[EFFICIENCY] {efficiency:.1f}% of files were already up-to-date")
 
 print("="*60)
+
+# Display rate limiting statistics
+print_rate_limiting_summary()
 
 # ====================================================================
 # EXIT CODE HANDLING - For CI/CD integration
