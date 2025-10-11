@@ -768,7 +768,7 @@ def main():
             config.tenant_id, config.client_id, config.client_secret,
             config.login_endpoint, config.graph_endpoint
         )
-        root_drive = client.sites.get_by_url(config.tenant_url).drive.get_by_path(config.upload_path)
+        root_drive = client.sites.get_by_url(config.tenant_url).drive.root.get_by_path(config.upload_path)
 
         # Execute the query to test connection and permissions
         # This also initializes the root_drive object for use
