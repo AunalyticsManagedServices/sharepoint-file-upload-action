@@ -584,16 +584,38 @@ graph TD
 <details>
 <summary><strong>🔧 Automatic Mermaid Sanitization</strong></summary>
 
-The action automatically fixes common Mermaid syntax issues before rendering:
+The action automatically fixes common Mermaid syntax issues before rendering. Here are real examples:
 
-| Issue | Fix | Reason |
-|-------|-----|--------|
-| `<br/>` tags | Changed to `<br>` | Mermaid doesn't support XHTML self-closing |
-| Double quotes in labels | Changed to single quotes | Prevents syntax errors |
-| Special chars in nodes | HTML entity encoding | `#`, `%`, `&`, `\|` break parser |
-| Double pipes `\|\|` | Changed to single `\|` | Invalid edge syntax |
-| Reserved word `end` | Changed to `End` | Lowercase breaks flowcharts |
-| HTML tags (except `<br>`) | Removed | Only `<br>` supported |
+### Before Sanitization (Would Fail)
+
+```
+graph TD
+    A[Server #1] --> B{Version |No| Skip}
+    B -->||"Proceed"|| C[Deploy]
+    C --> end
+    D[Post Action<br/>(Restart)]
+```
+
+### After Sanitization (Will Render)
+
+```
+graph TD
+    A[Server &#35;1] --> B{Version &#124;No&#124; Skip}
+    B -->|'Proceed'| C[Deploy]
+    C --> End
+    D[Post Action<br>(Restart)]
+```
+
+### What Gets Fixed
+
+| Issue | Before | After | Why |
+|-------|--------|-------|-----|
+| Special chars in nodes | `[Server #1]` | `[Server &#35;1]` | `#` breaks parser |
+| Pipes in diamonds | `{Version \|No\| Skip}` | `{Version &#124;No&#124; Skip}` | Unescaped pipes break syntax |
+| Double pipes in edges | `-->\|\|"Proceed"\|\|` | `-->\|'Proceed'\|` | Invalid edge syntax |
+| Double quotes | `\|"text"\|` | `\|'text'\|` | Prevents syntax errors |
+| Reserved words | `end` | `End` | Lowercase breaks flowcharts |
+| XHTML tags | `<br/>` | `<br>` | Mermaid only supports `<br>` |
 
 **Supported Node Shapes:**
 - Square brackets `[text]`
