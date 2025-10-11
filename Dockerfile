@@ -38,8 +38,9 @@ RUN adduser -D -u 1000 sharepoint && \
 
 USER sharepoint
 
-# Copy the Python script and puppeteer config
-COPY src/send_to_sharepoint.py /usr/src/app/
+# Copy the Python script, package, and puppeteer config
+COPY src/main.py /usr/src/app/
+COPY src/sharepoint_sync /usr/src/app/sharepoint_sync
 COPY src/puppeteer-config.json /usr/src/app/
 # full path is necessary or it defaults to main branch copy
-ENTRYPOINT [ "python", "/usr/src/app/send_to_sharepoint.py" ]
+ENTRYPOINT [ "python", "/usr/src/app/main.py" ]
