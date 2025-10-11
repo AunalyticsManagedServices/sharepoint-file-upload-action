@@ -568,43 +568,35 @@ Converts `.md` files to GitHub-flavored HTML with embedded styling:
 - ✅ Task lists with checkboxes
 - ✅ Blockquotes
 - ✅ Links and images
-- ✅ **Mermaid diagrams** (rendered as embedded SVG)
-
-**Example Mermaid Diagram:**
-````markdown
-```mermaid
-graph TD
-    A[Start] --> B{Decision}
-    B -->|Yes| C[Process]
-    B -->|No| D[End]
-    C --> D
-```
-````
+- ✅ **Mermaid diagrams with automatic mermaid sanitization** (rendered as embedded SVG)
 
 <details>
 <summary><strong>🔧 Automatic Mermaid Sanitization</strong></summary>
 
-The action automatically fixes common Mermaid syntax issues before rendering. Here are real examples:
+The action automatically fixes common Mermaid syntax issues before rendering.
 
 ### Before Sanitization (Would Fail)
-
-```
+````markdown
+```mermaid
 graph TD
     A[Server #1] --> B{Version |No| Skip}
     B -->||"Proceed"|| C[Deploy]
     C --> end
     D[Post Action<br/>(Restart)]
 ```
+````
 
 ### After Sanitization (Will Render)
 
-```
+````markdown
+```mermaid
 graph TD
     A[Server &#35;1] --> B{Version &#124;No&#124; Skip}
     B -->|'Proceed'| C[Deploy]
     C --> End
     D[Post Action<br>(Restart)]
 ```
+````
 
 ### What Gets Fixed
 
