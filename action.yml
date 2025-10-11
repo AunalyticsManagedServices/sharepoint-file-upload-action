@@ -51,6 +51,14 @@ inputs:
     description: 'Comma-separated list of exclusion patterns (e.g., "*.pyc,__pycache__,*.log")'
     required: false
     default: ""
+  sync_delete:
+    description: 'Delete SharePoint files that no longer exist in the repository (bidirectional sync)'
+    required: false
+    default: "false"
+  sync_delete_whatif:
+    description: 'Preview deletions without actually deleting (requires sync_delete=true)'
+    required: false
+    default: "true"
 outputs:
   return:
     description: 'Function output'
@@ -74,3 +82,5 @@ runs:
     - ${{ inputs.force_upload }}
     - ${{ inputs.convert_md_to_html }}
     - ${{ inputs.exclude_patterns }}
+    - ${{ inputs.sync_delete }}
+    - ${{ inputs.sync_delete_whatif }}
