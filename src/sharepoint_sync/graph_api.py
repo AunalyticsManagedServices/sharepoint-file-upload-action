@@ -408,7 +408,7 @@ def check_and_create_filehash_column(site_url, list_name, tenant_id, client_id, 
         for column in columns_data.get('value', []):
             if column.get('name') == 'FileHash' or column.get('displayName') == 'FileHash':
                 filehash_exists = True
-                print("[] FileHash column already exists")
+                print("[✓] FileHash column already exists")
                 break
 
         # Create column if it doesn't exist
@@ -442,7 +442,7 @@ def check_and_create_filehash_column(site_url, list_name, tenant_id, client_id, 
             )
 
             if create_response.status_code == 201:
-                print("[] FileHash column created successfully")
+                print("[✓] FileHash column created successfully")
                 # Wait briefly for column to be fully available (eventual consistency)
                 time.sleep(2)
 
@@ -613,7 +613,7 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
 
                     if col_name == 'FileHash' or col_display_name == 'FileHash':
                         filehash_column_found = True
-                        print(f"[DEBUG]  FileHash column found: name='{col_name}', displayName='{col_display_name}'")
+                        print(f"[DEBUG] ✓ FileHash column found: name='{col_name}', displayName='{col_display_name}'")
                         print(f"[DEBUG] Column details: {column}")
 
                 if not filehash_column_found:
@@ -668,14 +668,14 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
                 file_leaf_ref = item['fields'].get('FileLeafRef')
                 if file_leaf_ref == filename:
                     if debug_metadata:
-                        print(f"[DEBUG]  Found matching item: {file_leaf_ref}")
+                        print(f"[DEBUG] ✓ Found matching item: {file_leaf_ref}")
                         print(f"[DEBUG] Item ID: {item.get('id', 'N/A')}")
                         print(f"[DEBUG] All available fields in item: {list(item['fields'].keys())}")
 
                         # Check specifically for FileHash field
                         filehash_value = item['fields'].get('FileHash')
                         if filehash_value:
-                            print(f"[DEBUG]  FileHash found in item: {filehash_value}")
+                            print(f"[DEBUG] ✓ FileHash found in item: {filehash_value}")
                         else:
                             print(f"[DEBUG]  FileHash NOT found in item fields")
 
@@ -818,7 +818,7 @@ def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, 
 
         if update_response.status_code == 200:
             if debug_metadata:
-                print(f"[DEBUG]  Field update successful")
+                print(f"[DEBUG] ✓ Field update successful")
                 # Show updated field data
                 response_data = update_response.json()
                 if field_name in response_data:

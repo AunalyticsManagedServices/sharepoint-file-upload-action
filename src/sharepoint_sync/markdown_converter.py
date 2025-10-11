@@ -13,6 +13,108 @@ import subprocess
 import mistune
 
 
+def sanitize_mermaid_code(mermaid_code):
+    """
+    Sanitize Mermaid diagram code to fix common syntax issues.
+
+    Based on Mermaid.js documentation and common issues, this handles:
+    - Self-closing HTML tags (<br/> -> <br>)
+    - Double quotes in node labels (break Mermaid syntax)
+    - Special characters that break parser (%, ;, #, &, |)
+    - Reserved words like "end" (lowercase breaks diagrams)
+    - Problematic node prefixes ("o", "x" create unintended edges)
+    - HTML tags except <br>
+    - Curly braces in comments
+
+    Args:
+        mermaid_code (str): Raw Mermaid diagram definition
+
+    Returns:
+        str: Sanitized Mermaid code safe for mmdc rendering
+    """
+    sanitized = mermaid_code
+
+    # 1. Replace self-closing <br/> with <br> (Mermaid doesn't support XHTML syntax)
+    sanitized = re.sub(r'<br\s*/>', '<br>', sanitized, flags=re.IGNORECASE)
+
+    # 2. Remove other HTML tags except <br>
+    # Keep <br> since Mermaid supports it for line breaks
+    sanitized = re.sub(r'<(?!br\b)[^>]+>', '', sanitized, flags=re.IGNORECASE)
+
+    # 3. Fix reserved word "end" - it breaks Flowcharts and Sequence diagrams
+    # Replace standalone lowercase "end" with "End" in node labels
+    # Match patterns like [end], (end), or "end" but not "append", "ending", etc.
+    sanitized = re.sub(r'\b(end)\b', 'End', sanitized)
+
+    # 4. Escape special characters that break Mermaid syntax
+    # Use placeholders first, then replace with entity codes to avoid double-encoding
+    def sanitize_node_content(match):
+        """Replace special characters in node content with entity codes"""
+        content = match.group(1)
+
+        # Use temporary placeholders to avoid double-encoding
+        # Step 1: Replace with unique placeholders
+        content = content.replace('&', '___AMP___')
+        content = content.replace('#', '___HASH___')
+        content = content.replace('%', '___PERCENT___')
+        content = content.replace('|', '___PIPE___')
+        content = content.replace('"', '___QUOTE___')
+
+        # Step 2: Replace placeholders with entity codes (no more re-encoding possible)
+        content = content.replace('___AMP___', '&#38;')
+        content = content.replace('___HASH___', '&#35;')
+        content = content.replace('___PERCENT___', '&#37;')
+        content = content.replace('___PIPE___', '&#124;')
+        content = content.replace('___QUOTE___', "'")  # Use single quote instead
+
+        return f'[{content}]'
+
+    # Apply sanitization to content inside square brackets []
+    sanitized = re.sub(r'\[([^\]]*)\]', sanitize_node_content, sanitized)
+
+    # 5. Handle parentheses-based node shapes: (text), ((text)), etc.
+    def sanitize_paren_content(match):
+        """Replace special characters in parentheses node content"""
+        full_match = match.group(0)
+        opening_parens = match.group(1)
+        content = match.group(2)
+        closing_parens = match.group(3)
+
+        # Same approach with placeholders
+        content = content.replace('&', '___AMP___')
+        content = content.replace('#', '___HASH___')
+        content = content.replace('%', '___PERCENT___')
+        content = content.replace('|', '___PIPE___')
+        content = content.replace('"', '___QUOTE___')
+
+        content = content.replace('___AMP___', '&#38;')
+        content = content.replace('___HASH___', '&#35;')
+        content = content.replace('___PERCENT___', '&#37;')
+        content = content.replace('___PIPE___', '&#124;')
+        content = content.replace('___QUOTE___', "'")
+
+        return f'{opening_parens}{content}{closing_parens}'
+
+    # Match single or multiple parentheses: (text), ((text)), (((text)))
+    sanitized = re.sub(r'(\(+)([^()]+)(\)+)', sanitize_paren_content, sanitized)
+
+    # 6. Fix nodes starting with "o" or "x" which create unintended edges
+    # Add a space after node ID if it starts with o/x
+    # Pattern: matches "A o--> B" and changes to "A  o--> B"
+    sanitized = re.sub(r'(\w+)\s+([ox])---', r'\1  \2---', sanitized)
+    sanitized = re.sub(r'(\w+)\s+([ox])-->', r'\1  \2-->', sanitized)
+
+    # 7. Remove curly braces from comments (they confuse the renderer)
+    # Pattern: %% comment {with braces} -> %% comment with braces
+    def remove_braces_from_comments(match):
+        comment_text = match.group(1)
+        return f'%% {comment_text.replace("{", "").replace("}", "")}'
+
+    sanitized = re.sub(r'%%\s*([^\n]*)', remove_braces_from_comments, sanitized)
+
+    return sanitized
+
+
 def convert_mermaid_to_svg(mermaid_code):
     """
     Convert Mermaid diagram code to SVG using mermaid-cli.
@@ -27,9 +129,12 @@ def convert_mermaid_to_svg(mermaid_code):
         str: SVG content as string, or None if conversion fails
     """
     try:
+        # Sanitize the Mermaid code to fix common issues
+        sanitized_code = sanitize_mermaid_code(mermaid_code)
+
         # Create temporary files for input and output
         with tempfile.NamedTemporaryFile(mode='w', suffix='.mmd', delete=False) as mmd_file:
-            mmd_file.write(mermaid_code)
+            mmd_file.write(sanitized_code)
             mmd_path = mmd_file.name
 
         svg_path = mmd_path.replace('.mmd', '.svg')

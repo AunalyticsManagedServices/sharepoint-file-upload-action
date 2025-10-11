@@ -118,7 +118,7 @@ def ensure_folder_exists(parent_drive, folder_path):
                     # Folder found! Update references and cache it
                     current_drive = child
                     created_folders[current_path] = child
-                    print(f"[] Folder already exists: {current_path}")
+                    print(f"[✓] Folder already exists: {current_path}")
                     folder_found = True
                     break  # Stop searching once found
 
@@ -140,7 +140,7 @@ def ensure_folder_exists(parent_drive, folder_path):
 
                 current_drive = created_folder
                 created_folders[current_path] = created_folder
-                print(f"[] Created folder: {current_path}")
+                print(f"[✓] Created folder: {current_path}")
 
             except AttributeError:
                 # If create_folder method doesn't exist, try alternative approach
@@ -160,7 +160,7 @@ def ensure_folder_exists(parent_drive, folder_path):
 
                     current_drive = created_folder
                     created_folders[current_path] = created_folder
-                    print(f"[] Created folder: {current_path}")
+                    print(f"[✓] Created folder: {current_path}")
 
                 except Exception as add_error:
                     print(f"[!] add() method failed: {add_error}")
@@ -179,7 +179,7 @@ def ensure_folder_exists(parent_drive, folder_path):
                             if child.name == folder_name and hasattr(child, 'folder'):
                                 current_drive = child
                                 created_folders[current_path] = child
-                                print(f"[] Found existing folder: {current_path}")
+                                print(f"[✓] Found existing folder: {current_path}")
                                 break
                     except Exception as fallback_error:
                         # Couldn't retrieve existing folder - will use parent
@@ -194,7 +194,7 @@ def ensure_folder_exists(parent_drive, folder_path):
                         if test_folder and hasattr(test_folder, 'folder'):
                             current_drive = test_folder
                             created_folders[current_path] = test_folder
-                            print(f"[] Successfully navigated to folder: {current_path}")
+                            print(f"[✓] Successfully navigated to folder: {current_path}")
                         else:
                             raise Exception("Not a folder")
                     except Exception as nav_error:
@@ -214,7 +214,7 @@ def success_callback(remote_file, local_path, display_name=None):
     """Display success message after file upload."""
     # Use display_name if provided (for temp files), otherwise use local_path
     file_display = display_name if display_name else local_path
-    print(f"[] File {file_display} has been uploaded to {remote_file.web_url}")
+    print(f"[✓] File {file_display} has been uploaded to {remote_file.web_url}")
 
 
 def resumable_upload(drive, local_path, file_size, chunk_size, max_chunk_retry, timeout_secs):
@@ -384,7 +384,7 @@ def check_and_delete_existing_file(drive, file_name):
             # Delete the file from SharePoint
             # delete_object() marks for deletion, execute_query() performs it
             existing_file.delete_object().execute_query()
-            print(f"[] Existing file deleted successfully")
+            print(f"[✓] Existing file deleted successfully")
 
             # Brief pause to ensure SharePoint processes the deletion
             # Some SharePoint instances need this to avoid conflicts
@@ -453,7 +453,7 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
             print(f"[×] Deleting outdated file to prepare for update...")
             try:
                 remote_file.delete_object().execute_query()
-                print(f"[] Outdated file deleted successfully")
+                print(f"[✓] Outdated file deleted successfully")
                 time.sleep(0.5)  # Brief pause for SharePoint to process
                 upload_stats_dict['replaced_files'] += 1
             except Exception as e:
@@ -587,7 +587,7 @@ def upload_file(drive, local_path, chunk_size, force_upload, site_url, list_name
                     )
 
                     if success:
-                        print(f"[] FileHash metadata set: {local_hash[:8]}...")
+                        print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
 
                     else:
                         print(f"[!] Failed to set FileHash metadata via REST API")
