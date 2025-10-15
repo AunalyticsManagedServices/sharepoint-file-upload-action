@@ -67,6 +67,14 @@ inputs:
     description: 'Maximum hash calculation workers (default: CPU count for optimal performance)'
     required: false
     default: ""
+  debug:
+    description: 'Enable general debug output (execution flow, decisions, file processing)'
+    required: false
+    default: "false"
+  debug_metadata:
+    description: 'Enable metadata-specific debug output (Graph API fields, column verification)'
+    required: false
+    default: "false"
 outputs:
   return:
     description: 'Function output'
@@ -94,3 +102,5 @@ runs:
     - ${{ inputs.sync_delete_whatif }}
     - ${{ inputs.max_upload_workers }}
     - ${{ inputs.max_hash_workers }}
+    - ${{ inputs.debug }}
+    - ${{ inputs.debug_metadata }}

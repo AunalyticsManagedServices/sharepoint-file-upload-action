@@ -667,7 +667,7 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
                         print(f"[DEBUG] Column details: {column}")
 
                 if not filehash_column_found:
-                    print(f"[DEBUG]  FileHash column NOT found in list")
+                    print(f"[DEBUG] X FileHash column NOT found in list")
 
                 print(f"[DEBUG] Available columns: {column_names[:10]}...")  # Show first 10 columns
             else:
@@ -727,7 +727,7 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
                         if filehash_value:
                             print(f"[DEBUG] ✓ FileHash found in item: {filehash_value}")
                         else:
-                            print(f"[DEBUG]  FileHash NOT found in item fields")
+                            print(f"[DEBUG] X FileHash NOT found in item fields")
 
                         # Show sample of field values for debugging
                         field_sample = {}
@@ -738,7 +738,7 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
                     return item
 
         if debug_metadata:
-            print(f"[DEBUG]  No matching item found for '{filename}'")
+            print(f"[DEBUG] X No matching item found for '{filename}'")
             if items and len(items) > 0:
                 sample_names = [item.get('fields', {}).get('FileLeafRef', 'N/A') for item in items[:3]]
                 print(f"[DEBUG] Sample FileLeafRef values from list: {sample_names}")

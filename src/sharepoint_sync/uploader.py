@@ -5,7 +5,7 @@ Upload operations for SharePoint sync.
 This module handles all file upload operations including folder management,
 resumable uploads for large files, and metadata updates.
 
-All operations now use direct Graph REST API calls instead of Office365-REST-Python-Client.
+All operations use direct Graph REST API calls.
 """
 
 import os

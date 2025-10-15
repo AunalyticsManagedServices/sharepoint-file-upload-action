@@ -704,6 +704,12 @@ def main():
     # Parse configuration from command-line arguments
     config = parse_config()
 
+    # Set environment variables for debug flags (enables existing debug checks in utils.py)
+    if config.debug:
+        os.environ['DEBUG'] = 'true'
+    if config.debug_metadata:
+        os.environ['DEBUG_METADATA'] = 'true'
+
     # Display system configuration stats box
     print("\n" + "="*60)
     print("[✓] SYSTEM CONFIGURATION")

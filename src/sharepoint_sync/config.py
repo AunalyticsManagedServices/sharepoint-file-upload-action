@@ -34,6 +34,8 @@ class Config:
         16. sync_delete_whatif (optional) - Preview deletions without actually deleting (default: True)
         17. max_upload_workers (optional) - Max concurrent uploads (default: 4, respects Graph API limits)
         18. max_hash_workers (optional) - Max hash calculation workers (default: CPU count)
+        19. debug (optional) - Enable general debug output (default: False)
+        20. debug_metadata (optional) - Enable metadata-specific debug output (default: False)
         """
         # Required arguments
         self.site_name = sys.argv[1]
@@ -76,6 +78,10 @@ class Config:
         # Max markdown workers: Default 4 (mermaid-cli subprocess limit)
         # Balance between parallelism and Chromium memory usage
         self.max_markdown_workers = min(4, cpu_count)
+
+        # Debug flags
+        self.debug = (sys.argv[19] if len(sys.argv) > 19 else "false").lower() == "true"
+        self.debug_metadata = (sys.argv[20] if len(sys.argv) > 20 else "false").lower() == "true"
 
         # Derived values
         self.tenant_url = f'https://{self.sharepoint_host_name}/sites/{self.site_name}'
