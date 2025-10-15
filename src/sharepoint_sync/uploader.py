@@ -453,7 +453,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         if exists and needs_update:
             is_file_update = True
             if is_debug_enabled():
-                print(f"[→] Uploading updated file: {sanitized_name}")
+                print(f"[→] Uploading updated file: {local_path}")
                 if sanitized_name != file_name:
                     print(f"    (Original name: {file_name})")
             upload_stats_dict['replaced_files'] += 1
@@ -510,7 +510,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
             # Small file - use simple upload
             if is_debug_enabled():
                 action = "Updating" if is_file_update else "Uploading"
-                print(f"[→] {action} file with simple upload: {sanitized_name} ({file_size:,} bytes)")
+                print(f"[→] {action} file with simple upload: {local_path} ({file_size:,} bytes)")
 
             # Read file content
             with open(local_path, 'rb') as f:

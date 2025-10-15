@@ -158,7 +158,7 @@ def sanitize_mermaid_code(mermaid_code):
     return sanitized
 
 
-def convert_mermaid_to_svg(mermaid_code):
+def convert_mermaid_to_svg(mermaid_code, filename=None):
     """
     Convert Mermaid diagram code to SVG using mermaid-cli.
 
@@ -167,6 +167,7 @@ def convert_mermaid_to_svg(mermaid_code):
 
     Args:
         mermaid_code (str): Mermaid diagram definition
+        filename (str, optional): Original filename for error messages
 
     Returns:
         str: SVG content as string, or None if conversion fails
@@ -202,7 +203,11 @@ def convert_mermaid_to_svg(mermaid_code):
 
             return svg_content
         else:
-            print(f"[!] Mermaid conversion failed: {result.stderr}")
+            if filename:
+                print(f"[!] Mermaid conversion failed: {filename}")
+                print(f"    Error: {result.stderr}")
+            else:
+                print(f"[!] Mermaid conversion failed: {result.stderr}")
             # Clean up temp file
             if os.path.exists(mmd_path):
                 os.unlink(mmd_path)
@@ -211,7 +216,11 @@ def convert_mermaid_to_svg(mermaid_code):
             return None
 
     except Exception as e:
-        print(f"[!] Error converting Mermaid diagram: {e}")
+        if filename:
+            print(f"[!] Error converting Mermaid diagram: {filename}")
+            print(f"    Error: {e}")
+        else:
+            print(f"[!] Error converting Mermaid diagram: {e}")
         return None
 
 
@@ -240,7 +249,7 @@ def convert_markdown_to_html(md_content, filename):
         placeholder = f"<!--MERMAID_PLACEHOLDER_{len(mermaid_blocks)}-->"
 
         # Convert to SVG
-        svg_content = convert_mermaid_to_svg(mermaid_code)
+        svg_content = convert_mermaid_to_svg(mermaid_code, filename)
         if svg_content:
             # Clean up the SVG for inline embedding
             # Remove XML declaration if present
@@ -501,7 +510,7 @@ def convert_markdown_files_parallel(md_file_paths, max_workers=4):
             # Convert to HTML
             html_content = convert_markdown_to_html(
                 md_content,
-                os.path.basename(md_path)
+                md_path
             )
 
             return True, html_content
@@ -567,7 +576,7 @@ def convert_markdown_to_html_tempfile(md_path, output_dir=None):
         # Convert to HTML
         html_content = convert_markdown_to_html(
             md_content,
-            os.path.basename(md_path)
+            md_path
         )
 
         # Create temporary HTML file

@@ -263,7 +263,7 @@ class ParallelUploader:
                 md_content = md_file_handle.read()
 
             # Convert to HTML
-            html_content = convert_markdown_to_html(md_content, os.path.basename(file_path))
+            html_content = convert_markdown_to_html(md_content, file_path)
 
             # Create temp HTML file
             temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix='converted_md_')

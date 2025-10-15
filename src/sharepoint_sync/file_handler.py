@@ -315,7 +315,7 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
             if is_debug_enabled():
                 print(f"[#] Local hash: {local_hash[:8]}... for {sanitized_name}")
     elif is_debug_enabled():
-        print(f"[#] Using size-only comparison for converted file: {sanitized_name}")
+        print(f"[#] Using size-only comparison for converted file: {local_path}")
 
     # Get local file information
     local_size = os.path.getsize(local_path)
@@ -325,7 +325,7 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
 
     # Debug: Show what we're checking
     if is_debug_enabled():
-        print(f"[?] Checking if file exists in SharePoint: {sanitized_name}")
+        print(f"[?] Checking if file exists in SharePoint: {local_path}")
 
     # Use Graph REST API to check file existence and get metadata
     # This replaces the Office365 library usage
@@ -434,7 +434,7 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                     upload_stats_dict['bytes_skipped'] += local_size
             else:
                 if is_debug_enabled():
-                    print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {sanitized_name}")
+                    print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {local_path}")
 
             return needs_update, True, None, local_hash
 
