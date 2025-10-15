@@ -262,7 +262,7 @@ def should_exclude_path(path, exclude_patterns):
 
 def check_file_needs_update(local_path, file_name, site_url, list_name, filehash_column_available,
                             tenant_id=None, client_id=None, client_secret=None, login_endpoint=None,
-                            graph_endpoint=None, upload_stats_dict=None):
+                            graph_endpoint=None, upload_stats_dict=None, force_size_comparison=False):
     """
     Check if a file in SharePoint needs to be updated by comparing hash or size.
 
@@ -270,6 +270,7 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
     Files are compared using:
     1. FileHash (xxHash128) if column exists - most reliable
     2. Size comparison as fallback - works without custom columns
+    3. Size comparison only if force_size_comparison=True (for converted markdown)
 
     Args:
         local_path (str): Path to the local file
@@ -283,6 +284,8 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
         login_endpoint (str, optional): Azure AD login endpoint for REST API calls
         graph_endpoint (str, optional): Microsoft Graph API endpoint for REST API calls
         upload_stats_dict (dict, optional): Upload statistics dictionary to update
+        force_size_comparison (bool, optional): If True, skip hash comparison and use size only
+                                                 (used for converted markdown files where hash varies)
 
     Returns:
         tuple: (needs_update: bool, exists: bool, remote_file: None, local_hash: str or None)
@@ -304,10 +307,15 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
     sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
 
     # Calculate local file hash upfront for efficiency
-    local_hash = calculate_file_hash(local_path)
-    if local_hash:
-        if is_debug_enabled():
-            print(f"[#] Local hash: {local_hash[:8]}... for {sanitized_name}")
+    # Skip hash calculation if force_size_comparison is True (converted markdown)
+    local_hash = None
+    if not force_size_comparison:
+        local_hash = calculate_file_hash(local_path)
+        if local_hash:
+            if is_debug_enabled():
+                print(f"[#] Local hash: {local_hash[:8]}... for {sanitized_name}")
+    elif is_debug_enabled():
+        print(f"[#] Using size-only comparison for converted file: {sanitized_name}")
 
     # Get local file information
     local_size = os.path.getsize(local_path)
@@ -355,7 +363,8 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                             remote_size = None
 
                     # Try to get FileHash if column is available
-                    if filehash_column_available:
+                    # Skip hash comparison if force_size_comparison is True (converted markdown)
+                    if filehash_column_available and not force_size_comparison:
                         remote_hash = fields.get('FileHash')
 
                         if remote_hash:
@@ -381,6 +390,8 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                                 return True, True, None, local_hash
                         elif debug_metadata:
                             print(f"[DEBUG] FileHash not found in list item fields")
+                    elif force_size_comparison and debug_metadata:
+                        print(f"[DEBUG] Skipping hash comparison for converted markdown file")
                 elif debug_metadata:
                     print(f"[DEBUG] Could not retrieve list item data for {sanitized_name}")
 

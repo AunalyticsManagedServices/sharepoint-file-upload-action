@@ -318,6 +318,7 @@ class ParallelUploader:
             desired_html_filename = os.path.basename(original_html_path)
 
             # Upload HTML file
+            # Use size-only comparison for converted markdown (Mermaid IDs cause hash variation)
             for i in range(config.max_retry):
                 try:
                     upload_file(
@@ -326,7 +327,8 @@ class ParallelUploader:
                         config.tenant_id, config.client_id, config.client_secret,
                         config.login_endpoint, config.graph_endpoint,
                         self.stats_wrapper, desired_name=desired_html_filename,
-                        metadata_queue=self.metadata_queue  # Pass queue for batch updates
+                        metadata_queue=self.metadata_queue,  # Pass queue for batch updates
+                        force_size_comparison=True  # Use size-only for converted markdown
                     )
                     break
                 except Exception as e:

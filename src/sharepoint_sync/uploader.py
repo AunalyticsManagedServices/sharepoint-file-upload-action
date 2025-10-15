@@ -401,7 +401,7 @@ def check_and_delete_existing_file(drive, file_name):
 def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force_upload, site_url, list_name,
                 filehash_column_available, tenant_id, client_id, client_secret,
                 login_endpoint, graph_endpoint, upload_stats_dict, desired_name=None,
-                metadata_queue=None):
+                metadata_queue=None, force_size_comparison=False):
     """
     Upload a file to SharePoint using Graph API, intelligently skipping unchanged files.
 
@@ -423,6 +423,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         upload_stats_dict (dict): Dictionary to track upload statistics
         desired_name (str): Optional desired filename in SharePoint (for temp file uploads)
         metadata_queue: Optional BatchQueue for batching metadata updates (parallel mode)
+        force_size_comparison (bool): If True, use size comparison only (for converted markdown)
     """
     # Use desired_name if provided (for HTML conversions), otherwise use actual filename
     file_name = desired_name if desired_name else os.path.basename(local_path)
@@ -441,7 +442,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         needs_update, exists, remote_file, local_hash = check_file_needs_update(
             local_path, file_name, site_url, list_name,
             filehash_column_available, tenant_id, client_id, client_secret,
-            login_endpoint, graph_endpoint, upload_stats_dict
+            login_endpoint, graph_endpoint, upload_stats_dict, force_size_comparison
         )
 
         # If file doesn't need updating, skip it
@@ -544,6 +545,12 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
 
         # Update upload byte counter after successful upload
         upload_stats_dict['bytes_uploaded'] += file_size
+
+        # Calculate hash after upload if we didn't calculate it earlier (force_size_comparison mode)
+        if not local_hash and force_size_comparison:
+            local_hash = calculate_file_hash(local_path)
+            if local_hash and is_debug_enabled():
+                print(f"[#] Calculated hash after upload for converted file: {local_hash[:8]}...")
 
         # Try to set the FileHash metadata if we have a hash using direct REST API
         if local_hash:

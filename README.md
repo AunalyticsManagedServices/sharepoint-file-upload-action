@@ -748,6 +748,31 @@ All shapes are auto-sanitized for special characters. No manual fixes needed!
 
 </details>
 
+<details>
+<summary><strong>💡 Smart Sync for Converted Markdown</strong></summary>
+
+Converted markdown files use **size-based comparison** instead of hash comparison to prevent unnecessary re-uploads.
+
+**Why?**
+- Mermaid diagrams may generate SVGs with varying internal IDs between renders
+- Content and visual appearance remain identical, but hash changes
+- File size stays consistent for the same diagram
+
+**How It Works:**
+1. **Before Upload**: Compares file **size** (not hash) between local HTML and SharePoint HTML
+2. **Smart Skip**: If sizes match, file is skipped (no unnecessary upload)
+3. **After Upload**: Calculates and saves hash to FileHash column for future reference
+
+**Result:**
+- ✅ Markdown files with unchanged content won't re-upload
+- ✅ Mermaid diagram variations don't trigger false positives
+- ✅ FileHash column still populated for all files
+- ✅ Smart sync works perfectly for documentation repositories
+
+**Note:** Regular files (non-markdown) still use hash-based comparison for maximum accuracy.
+
+</details>
+
 ### Sync Deletion
 
 **Bidirectional sync** - automatically removes SharePoint files that no longer exist in your repository.
