@@ -262,21 +262,8 @@ class ParallelUploader:
             with open(file_path, 'r', encoding='utf-8') as md_file_handle:
                 md_content = md_file_handle.read()
 
-            # Calculate current file's relative path for link rewriting
-            if base_path:
-                current_file_relative_path = os.path.relpath(file_path, base_path).replace('\\', '/')
-            else:
-                current_file_relative_path = os.path.basename(file_path)
-
-            # Convert to HTML with link rewriting
-            html_content = convert_markdown_to_html(
-                md_content,
-                os.path.basename(file_path),
-                sharepoint_site_url=config.tenant_url,
-                sharepoint_folder_path=config.upload_path,
-                current_file_relative_path=current_file_relative_path,
-                convert_md_to_html_flag=config.convert_md_to_html
-            )
+            # Convert to HTML
+            html_content = convert_markdown_to_html(md_content, os.path.basename(file_path))
 
             # Create temp HTML file
             temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix='converted_md_')

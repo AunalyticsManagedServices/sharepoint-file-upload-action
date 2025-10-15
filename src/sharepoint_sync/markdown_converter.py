@@ -11,8 +11,6 @@ import re
 import tempfile
 import subprocess
 import mistune
-from urllib.parse import quote, urlparse, urljoin
-import posixpath
 
 
 def sanitize_mermaid_code(mermaid_code):
@@ -22,7 +20,7 @@ def sanitize_mermaid_code(mermaid_code):
     Based on Mermaid.js documentation and common issues, this handles:
     - Self-closing HTML tags (<br/> -> <br>)
     - Double quotes in node labels (break Mermaid syntax)
-    - Special characters that break parser (%, ;, #, &, |, <, >)
+    - Special characters that break parser (%, ;, #, &, |)
     - Reserved words like "end" (lowercase breaks diagrams)
     - Problematic node prefixes ("o", "x" create unintended edges)
     - HTML tags except <br>
@@ -59,13 +57,8 @@ def sanitize_mermaid_code(mermaid_code):
 
     # 5. Escape special characters that break Mermaid syntax
     # Use placeholders first, then replace with entity codes to avoid double-encoding
-    def sanitize_content(content, escape_comparison_ops=False):
-        """Replace special characters with entity codes using placeholders
-
-        Args:
-            content: The text content to sanitize
-            escape_comparison_ops: If True, also escape < and > characters
-        """
+    def sanitize_content(content):
+        """Replace special characters with entity codes using placeholders"""
         # Use temporary placeholders to avoid double-encoding
         content = content.replace('&', '___AMP___')
         content = content.replace('#', '___HASH___')
@@ -73,21 +66,12 @@ def sanitize_mermaid_code(mermaid_code):
         content = content.replace('|', '___PIPE___')
         content = content.replace('"', '___QUOTE___')
 
-        # Optionally escape comparison operators (for diamond nodes)
-        if escape_comparison_ops:
-            content = content.replace('<', '___LT___')
-            content = content.replace('>', '___GT___')
-
         # Replace placeholders with entity codes
         content = content.replace('___AMP___', '&#38;')
         content = content.replace('___HASH___', '&#35;')
         content = content.replace('___PERCENT___', '&#37;')
         content = content.replace('___PIPE___', '&#124;')
         content = content.replace('___QUOTE___', "'")  # Use single quote instead
-
-        if escape_comparison_ops:
-            content = content.replace('___LT___', '&#60;')
-            content = content.replace('___GT___', '&#62;')
 
         return content
 
@@ -97,8 +81,7 @@ def sanitize_mermaid_code(mermaid_code):
         return f'[{sanitize_content(content)}]'
 
     # Apply sanitization to content inside square brackets []
-    # Use non-greedy match and ensure we're matching complete bracket pairs
-    sanitized = re.sub(r'\[([^\[\]]*?)\]', sanitize_node_content, sanitized)
+    sanitized = re.sub(r'\[([^]]*)]', sanitize_node_content, sanitized)
 
     # 6. Handle parentheses-based node shapes: (text), ((text)), etc.
     def sanitize_paren_content(match):
@@ -110,23 +93,19 @@ def sanitize_mermaid_code(mermaid_code):
         return f'{opening_parens}{sanitize_content(content)}{closing_parens}'
 
     # Match single or multiple parentheses: (text), ((text)), (((text)))
-    # Use non-greedy match for content
-    sanitized = re.sub(r'(\(+)([^()]+?)(\)+)', sanitize_paren_content, sanitized)
+    sanitized = re.sub(r'(\(+)([^()]+)(\)+)', sanitize_paren_content, sanitized)
 
     # 7. Handle curly brace diamond/rhombus nodes: {text}, {{text}}
-    # These often contain comparison operators like <, >, <=, >= which MUST be escaped
     def sanitize_curly_content(match):
-        """Replace special characters in curly brace node content (diamond/rhombus nodes)"""
+        """Replace special characters in curly brace node content"""
         opening_braces = match.group(1)
         content = match.group(2)
         closing_braces = match.group(3)
 
-        # Diamond nodes often have comparison operators - escape them
-        return f'{opening_braces}{sanitize_content(content, escape_comparison_ops=True)}{closing_braces}'
+        return f'{opening_braces}{sanitize_content(content)}{closing_braces}'
 
     # Match single or double curly braces: {text}, {{text}}
-    # Use non-greedy match for content
-    sanitized = re.sub(r'(\{+)([^{}]+?)(}+)', sanitize_curly_content, sanitized)
+    sanitized = re.sub(r'(\{+)([^{}]+)(}+)', sanitize_curly_content, sanitized)
 
     # 8. Handle trapezoid node shapes: [/text\] and [\text/]
     def sanitize_trapezoid_content(match):
@@ -150,7 +129,7 @@ def sanitize_mermaid_code(mermaid_code):
         """Replace special characters in edge labels"""
         prefix = match.group(1)
         label = match.group(2)
-        suffix = match.group(3) if len(match.groups()) >= 3 else ''
+        suffix = match.group(3)
 
         # For edge labels, only escape quotes and special chars that break syntax
         # Don't escape pipes since they're delimiters
@@ -161,9 +140,8 @@ def sanitize_mermaid_code(mermaid_code):
 
         return f'{prefix}|{label_sanitized}|{suffix}'
 
-    # Match edge labels: arrow followed by |text| followed by arrow, node, or whitespace
-    # Improved regex to handle more cases including edge labels at end of line
-    sanitized = re.sub(r'(--[>-])\|([^|\n]+)\|(?=(--[>-]|\s+[\w\[\{\(]|\s*$))', sanitize_edge_label, sanitized)
+    # Match edge labels: arrow followed by |text| followed by arrow or node
+    sanitized = re.sub(r'(--[>-])\|([^|]+)\|(--[>-]|\s+\w)', sanitize_edge_label, sanitized)
 
     # 11. Fix nodes starting with "o" or "x" which create unintended edges
     # Add a space after node ID if it starts with o/x
@@ -178,116 +156,6 @@ def sanitize_mermaid_code(mermaid_code):
     sanitized = re.sub(r'%%\s*([^\n]*)', remove_braces_from_comments, sanitized)
 
     return sanitized
-
-
-def rewrite_markdown_links(md_content, sharepoint_site_url=None, sharepoint_folder_path=None,
-                          current_file_relative_path="", convert_md_to_html=True):
-    """
-    Rewrite markdown links to point to SharePoint locations instead of GitHub.
-
-    This function processes markdown links and converts relative .md file links to
-    point to their SharePoint HTML equivalents when convert_md_to_html is enabled.
-
-    Args:
-        md_content (str): Markdown content with links to rewrite
-        sharepoint_site_url (str): SharePoint site URL (e.g., 'https://company.sharepoint.com/sites/SiteName')
-        sharepoint_folder_path (str): Path in SharePoint document library (e.g., 'Shared Documents/Folder')
-        current_file_relative_path (str): Current file's path relative to sync root (for resolving ../.. links)
-        convert_md_to_html (bool): Whether .md files are being converted to .html
-
-    Returns:
-        str: Markdown content with rewritten links
-
-    Examples:
-        >>> # Simple relative link
-        >>> content = "[Link](./README.md)"
-        >>> rewrite_markdown_links(content, "https://site.com/sites/MS", "Docs/Sync", "", True)
-        "[Link](https://site.com/sites/MS/Docs/Sync/README.html)"
-
-        >>> # Parent directory link
-        >>> content = "[Link](../other/doc.md)"
-        >>> rewrite_markdown_links(content, "https://site.com/sites/MS", "Docs/Sync", "subfolder/file.md", True)
-        "[Link](https://site.com/sites/MS/Docs/Sync/other/doc.html)"
-    """
-    if not sharepoint_site_url or not sharepoint_folder_path:
-        # If SharePoint info not provided, return content unchanged
-        return md_content
-
-    # Ensure SharePoint paths use forward slashes and are properly formatted
-    sharepoint_folder_path = sharepoint_folder_path.replace('\\', '/')
-    current_file_relative_path = current_file_relative_path.replace('\\', '/')
-
-    # Get the directory of the current file (for resolving relative links)
-    if current_file_relative_path:
-        current_dir = posixpath.dirname(current_file_relative_path)
-    else:
-        current_dir = ""
-
-    def rewrite_link(match):
-        """Rewrite a single markdown link"""
-        link_text = match.group(1)
-        link_url = match.group(2)
-
-        # Parse the URL
-        parsed = urlparse(link_url)
-
-        # Skip if it's an absolute URL (http:// or https://)
-        if parsed.scheme in ('http', 'https'):
-            return match.group(0)  # Return unchanged
-
-        # Skip if it's an anchor-only link (#section)
-        if link_url.startswith('#'):
-            return match.group(0)  # Return unchanged
-
-        # Skip if it's a mailto: link
-        if parsed.scheme == 'mailto':
-            return match.group(0)  # Return unchanged
-
-        # Check if this is a relative link to a .md file
-        link_path = parsed.path
-        link_fragment = parsed.fragment  # Anchor (#section)
-
-        # Only process .md links if we're converting to HTML
-        if convert_md_to_html and link_path.lower().endswith('.md'):
-            # Resolve the relative path from current file's location
-            if current_dir:
-                # Combine current directory with relative link
-                resolved_path = posixpath.normpath(posixpath.join(current_dir, link_path))
-            else:
-                # No current directory, clean up the path
-                resolved_path = posixpath.normpath(link_path)
-
-            # Remove leading ./ or ./
-            resolved_path = resolved_path.lstrip('./')
-
-            # Convert .md to .html
-            resolved_path = resolved_path[:-3] + '.html'  # Remove .md, add .html
-
-            # Build SharePoint URL
-            # Format: https://site.com/sites/SiteName/Shared%20Documents/Folder/Path/file.html
-            sharepoint_base = f"{sharepoint_site_url}/{sharepoint_folder_path}"
-            full_path = f"{sharepoint_base}/{resolved_path}"
-
-            # URL encode the path (spaces become %20, etc.) but preserve slashes
-            # quote() with safe='/:' preserves scheme (https://) and path separators (/)
-            full_url = quote(full_path, safe=':/')
-
-            # Add fragment if present
-            if link_fragment:
-                full_url += f"#{link_fragment}"
-
-            return f"[{link_text}]({full_url})"
-
-        # Return unchanged for non-.md links or when not converting
-        return match.group(0)
-
-    # Pattern for markdown links: [text](url)
-    link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
-
-    # Rewrite all links
-    rewritten = re.sub(link_pattern, rewrite_link, md_content)
-
-    return rewritten
 
 
 def convert_mermaid_to_svg(mermaid_code):
@@ -347,39 +215,22 @@ def convert_mermaid_to_svg(mermaid_code):
         return None
 
 
-def convert_markdown_to_html(md_content, filename, sharepoint_site_url=None,
-                            sharepoint_folder_path=None, current_file_relative_path="",
-                            convert_md_to_html_flag=True):
+def convert_markdown_to_html(md_content, filename):
     """
     Convert Markdown content to HTML with Mermaid diagrams rendered as SVG.
 
     This function:
-    1. Rewrites internal .md links to point to SharePoint .html files (if params provided)
-    2. Parses markdown using Mistune
-    3. Finds and converts Mermaid code blocks to inline SVG
-    4. Applies GitHub-like styling for SharePoint viewing
+    1. Parses markdown using Mistune
+    2. Finds and converts Mermaid code blocks to inline SVG
+    3. Applies GitHub-like styling for SharePoint viewing
 
     Args:
         md_content (str): Markdown content to convert
         filename (str): Original filename for the HTML title
-        sharepoint_site_url (str, optional): SharePoint site URL for link rewriting
-        sharepoint_folder_path (str, optional): SharePoint folder path for link rewriting
-        current_file_relative_path (str, optional): Current file's relative path (for resolving ../.. links)
-        convert_md_to_html_flag (bool, optional): Whether .md links should convert to .html (default: True)
 
     Returns:
         str: Complete HTML document with embedded styles and SVGs
     """
-    # Rewrite internal .md links to point to SharePoint .html locations (if params provided)
-    if sharepoint_site_url and sharepoint_folder_path:
-        md_content = rewrite_markdown_links(
-            md_content,
-            sharepoint_site_url=sharepoint_site_url,
-            sharepoint_folder_path=sharepoint_folder_path,
-            current_file_relative_path=current_file_relative_path,
-            convert_md_to_html=convert_md_to_html_flag
-        )
-
     # First, extract and convert all mermaid blocks to placeholder SVGs
     mermaid_pattern = r'```mermaid\n(.*?)\n```'
     mermaid_blocks = []
