@@ -732,6 +732,7 @@ graph TD
 |-------|--------|-------|-----|
 | Special chars in nodes | `[Server #1]` | `[Server &#35;1]` | `#` breaks parser |
 | Pipes in diamonds | `{Version \|No\| Skip}` | `{Version &#124;No&#124; Skip}` | Unescaped pipes break syntax |
+| Comparison operators | `{Version >= 1.0?}` | `{Version &#62;= 1.0?}` | `<` and `>` break diamond nodes |
 | Double pipes in edges | `-->\|\|"Proceed"\|\|` | `-->\|'Proceed'\|` | Invalid edge syntax |
 | Double quotes | `\|"text"\|` | `\|'text'\|` | Prevents syntax errors |
 | Reserved words | `end` | `End` | Lowercase breaks flowcharts |
