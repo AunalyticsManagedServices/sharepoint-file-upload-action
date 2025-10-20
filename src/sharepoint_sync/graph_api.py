@@ -1997,7 +1997,8 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
     Args:
         site_url (str): Full SharePoint site URL
         list_name (str): Name of the document library
-        updates_list (list): List of (item_id, filename, hash_value) tuples
+        updates_list (list): List of (item_id, filename, hash_value, display_path) tuples
+            where display_path is the relative SharePoint path for debug output
         tenant_id (str): Azure AD tenant ID
         client_id (str): App registration client ID
         client_secret (str): App registration client secret
@@ -2011,9 +2012,9 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
 
     Example:
         updates = [
-        ...     ('item1', 'file1.txt', 'hash1'),
-        ...     ('item2', 'file2.txt', 'hash2'),
-        ...     ('item3', 'file3.txt', 'hash3')
+        ...     ('item1', 'file1.txt', 'hash1', 'docs/file1.txt'),
+        ...     ('item2', 'file2.txt', 'hash2', 'api/file2.txt'),
+        ...     ('item3', 'file3.html', 'hash3', 'guides/admin/file3.html')
         ... ]
         results = batch_update_filehash_fields(
         ...     site_url, lib_name, updates, ...
@@ -2104,7 +2105,7 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
                 "requests": []
             }
 
-            for idx, (item_id, filename, hash_value) in enumerate(batch):
+            for idx, (item_id, filename, hash_value, display_path) in enumerate(batch):
                 request_item = {
                     "id": str(idx),
                     "method": "PATCH",
@@ -2131,7 +2132,7 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
 
                     for result in batch_results:
                         request_id = int(result['id'])
-                        item_id, filename, hash_value = batch[request_id]
+                        item_id, filename, hash_value, display_path = batch[request_id]
 
                         # Check if update succeeded (2xx status code)
                         success = 200 <= result['status'] < 300
@@ -2139,11 +2140,13 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
                         if success:
                             results[item_id] = True
                             if debug_metadata:
-                                print(f"[DEBUG] ✓ Updated FileHash for {filename}")
+                                # Show relative path and sanitized filename for better context
+                                print(f"[DEBUG] ✓ Updated FileHash for {display_path} ({filename})")
                         else:
                             results[item_id] = False
                             if debug_metadata:
-                                print(f"[DEBUG] × Failed to update FileHash for {filename}: {result.get('status')}")
+                                # Show relative path and sanitized filename for better context
+                                print(f"[DEBUG] × Failed to update FileHash for {display_path} ({filename}): {result.get('status')}")
 
                     if is_debug_enabled():
                         success_count = sum(1 for r in batch_results if 200 <= r['status'] < 300)
@@ -2156,14 +2159,14 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
                         print(f"[DEBUG] Batch response: {batch_response.text[:500]}")
 
                     # Mark all items in this batch as failed
-                    for item_id, _, _ in batch:
+                    for item_id, _, _, _ in batch:
                         results[item_id] = False
 
             except Exception as batch_error:
                 print(f"[!] Error processing batch {batch_index}: {str(batch_error)[:200]}")
 
                 # Mark all items in this batch as failed
-                for item_id, _, _ in batch:
+                for item_id, _, _, _ in batch:
                     results[item_id] = False
 
         # Summary
@@ -2182,4 +2185,4 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
             print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
 
         # Return all failed
-        return {item_id: False for item_id, _, _ in updates_list}
+        return {item_id: False for item_id, _, _, _ in updates_list}

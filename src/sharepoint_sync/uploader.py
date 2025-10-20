@@ -575,7 +575,8 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
                     # Check if we should queue this for batch processing or process immediately
                     if metadata_queue is not None:
                         # Parallel mode: Queue metadata update for batch processing
-                        metadata_queue.put((item_id, sanitized_name, hash_to_save, is_file_update))
+                        # Include display_path for better debug output
+                        metadata_queue.put((item_id, sanitized_name, hash_to_save, is_file_update, display_path))
                         if is_debug_enabled():
                             print(f"[#] Queued FileHash metadata update for batch processing")
                     else:
