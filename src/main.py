@@ -691,7 +691,8 @@ def print_summary(total_files, whatif_mode=False):
         return f"{bytes_val:.1f} TB"
 
     # Create visual separator for better readability
-    print("\n" + "="*60)
+    print()  # Empty print - won't get [Main] prefix in DEBUG mode
+    print("="*60)
     print("[✓] SYNC PROCESS COMPLETED")
     print("="*60)
 
@@ -825,7 +826,7 @@ def identify_files_to_delete(sharepoint_files, local_files_set):
     return files_to_delete
 
 
-def perform_sync_deletion(local_files, base_path, config):
+def perform_sync_deletion(local_files, base_path, config, sharepoint_cache=None):
     """
     Delete files from SharePoint that are not in the local sync set.
 
@@ -833,6 +834,8 @@ def perform_sync_deletion(local_files, base_path, config):
         local_files (list): List of local file paths being synced
         base_path (str): Base path for maintaining folder structure
         config: Configuration object
+        sharepoint_cache (dict): Optional pre-built cache of SharePoint files
+                                If provided, eliminates API call to list files
 
     Returns:
         int: Number of files successfully deleted
@@ -845,23 +848,42 @@ def perform_sync_deletion(local_files, base_path, config):
     """
     debug_enabled = is_debug_enabled()
 
-    # Step 1: List all files currently in SharePoint folder
-    print("\n[*] Listing files in SharePoint target folder...")
-    try:
-        sharepoint_files = list_files_in_folder_recursive(
-            None,  # drive parameter not used - function uses Graph REST API
-            config.upload_path,
-            config.tenant_url,
-            config.tenant_id,
-            config.client_id,
-            config.client_secret,
-            config.login_endpoint,
-            config.graph_endpoint
-        )
-        print(f"[OK] Found {len(sharepoint_files)} files in SharePoint")
-    except Exception as e:
-        print(f"[!] Failed to list SharePoint files: {str(e)}")
-        return 0
+    # Step 1: Get list of files currently in SharePoint folder
+    # Use cache if available (eliminates API call), otherwise query SharePoint
+    print("\n[*] Checking for orphaned files...")
+    if sharepoint_cache is not None:
+        # Convert cache to same format as list_files_in_folder_recursive
+        # Cache format: {"path/to/file.html": {"item_id": "...", "size": ..., "name": "..."}}
+        # Need format: [{"path": "path/to/file.html", "id": "...", "size": ..., "name": "...", "drive_item": None}]
+        sharepoint_files = []
+        for file_path, file_info in sharepoint_cache.items():
+            sharepoint_files.append({
+                'path': file_path,
+                'id': file_info.get('item_id'),
+                'size': file_info.get('size'),
+                'name': file_info.get('name'),
+                'drive_item': None  # Not needed for deletion with Graph API
+            })
+        if debug_enabled:
+            print(f"[DEBUG] Using cached SharePoint file list: {len(sharepoint_files)} files")
+    else:
+        if debug_enabled:
+            print("[DEBUG] Querying SharePoint for file list...")
+        try:
+            sharepoint_files = list_files_in_folder_recursive(
+                None,  # drive parameter not used - function uses Graph REST API
+                config.upload_path,
+                config.tenant_url,
+                config.tenant_id,
+                config.client_id,
+                config.client_secret,
+                config.login_endpoint,
+                config.graph_endpoint
+            )
+            print(f"[OK] Found {len(sharepoint_files)} files in SharePoint")
+        except Exception as e:
+            print(f"[!] Failed to list SharePoint files: {str(e)}")
+            return 0
 
     # Step 2: Build set of local file relative paths
     # Need to calculate the relative paths the same way upload does
@@ -984,35 +1006,49 @@ def main():
     print(f"Batch Metadata Updates:    Enabled (20 items/batch)")
     print("="*60 + "\n")
 
-    # Show sync mode to user
+    # ============================================================
+    # [1/5] CONFIGURATION
+    # ============================================================
+    print("="*60)
+    print("[1/5] CONFIGURATION")
+    print("="*60)
+
+    # Show sync mode
     if config.force_upload:
-        print("[!] Force upload mode enabled - all files will be uploaded regardless of changes")
+        print("[!] Force upload mode: Enabled (upload all files)")
     else:
-        print("[OK] Smart sync mode enabled - unchanged files will be skipped")
+        print("[✓] Smart sync mode: Enabled (skip unchanged files)")
 
     # Show markdown conversion mode
     if config.convert_md_to_html:
-        print("[OK] Markdown to HTML conversion enabled - .md files will be converted with Mermaid diagrams as SVG")
+        print("[✓] Markdown conversion: Enabled (with Mermaid diagrams)")
     else:
-        print("[!] Markdown to HTML conversion disabled - .md files will be uploaded as-is")
-
-    # Show exclusion patterns if any
-    if config.exclude_patterns_list:
-        print(f"[=] Exclusion patterns enabled: {', '.join(config.exclude_patterns_list)}")
+        print("[!] Markdown conversion: Disabled (.md files uploaded as-is)")
 
     # Show sync deletion mode
     if config.sync_delete:
         if config.sync_delete_whatif:
-            print("[!] Sync deletion enabled in WHATIF mode - will show what would be deleted without actually deleting")
+            print("[!] Sync deletion: Enabled in WHATIF mode (preview only)")
         else:
-            print("[!] Sync deletion enabled - files in SharePoint but not in sync set will be DELETED")
+            print("[!] Sync deletion: Enabled (will delete orphaned files)")
     else:
-        print("[OK] Sync deletion disabled - no files will be removed from SharePoint")
+        print("[✓] Sync deletion: Disabled (no files will be removed)")
 
-    # Show file discovery details
-    print(f"[=] Current working directory: {os.getcwd()}")
-    print(f"[=] Searching for files matching pattern: {config.file_path}")
-    print(f"[=] Recursive search: {config.recursive}")
+    # Show parallel processing
+    print(f"[✓] Parallel processing: {config.max_upload_workers} workers")
+
+    # Show exclusion patterns if any (optional)
+    if config.exclude_patterns_list:
+        print(f"[=] Exclusion patterns: {', '.join(config.exclude_patterns_list)}")
+
+    # ============================================================
+    # [2/5] FILE DISCOVERY
+    # ============================================================
+    print("="*60)
+    print("[2/5] FILE DISCOVERY")
+    print("="*60)
+    print(f"[*] Working directory: {os.getcwd()}")
+    print(f"[*] Pattern: {config.file_path} {'(recursive)' if config.recursive else ''}")
 
     # Discover files based on glob pattern and exclusions
     local_files, local_dirs = discover_files(
@@ -1025,12 +1061,18 @@ def main():
         print("[!] No files matched the pattern")
         sys.exit(1)
 
-    print(f"[*] Found {len(local_files)} files to process")
+    print(f"[✓] Found {len(local_files)} files to process")
+    print()
 
     # Calculate base path for maintaining folder structure
     base_path = calculate_base_path(local_files, local_dirs)
 
-    # Connect to SharePoint using Graph API
+    # ============================================================
+    # [3/5] SHAREPOINT CONNECTION
+    # ============================================================
+    print("="*60)
+    print("[3/5] SHAREPOINT CONNECTION")
+    print("="*60)
     print("[*] Connecting to SharePoint...")
     try:
         # Get drive item using Graph REST API
@@ -1051,7 +1093,7 @@ def main():
         if not all([site_id, drive_id, root_item_id]):
             raise Exception("Failed to get SharePoint IDs from path lookup")
 
-        print(f"[✓] Connected to SharePoint at: {config.upload_path}")
+        print(f"[✓] Connected: {config.upload_path}")
         if is_debug_enabled():
             print(f"[DEBUG] Site ID: {site_id}")
             print(f"[DEBUG] Drive ID: {drive_id}")
@@ -1061,15 +1103,18 @@ def main():
         library_name = get_library_name_from_path(config.upload_path)
 
         # Attempt to create the FileHash column for hash-based comparison
+        print("[*] Verifying FileHash column...")
         filehash_column_available, library_name = check_and_create_filehash_column(
             config.tenant_url, library_name,
             config.tenant_id, config.client_id, config.client_secret,
             config.login_endpoint, config.graph_endpoint
         )
         if filehash_column_available:
-            print("[✓] FileHash column is available for hash-based comparison")
+            print("[✓] FileHash column available for hash-based comparison")
         else:
             print("[!] FileHash column not available, will use size-based comparison")
+
+        print()
 
     except Exception as conn_error:
         # Connection failed - provide helpful troubleshooting info
@@ -1081,12 +1126,48 @@ def main():
         print("    - You have appropriate permissions")
         sys.exit(1)  # Exit with error code
 
+    # ============================================================
+    # [4/5] BUILDING METADATA CACHE
+    # ============================================================
+    # Build SharePoint metadata cache for efficient file comparison
+    # Skip cache building in force upload mode (no comparisons needed)
+    sharepoint_cache = None
+    if not config.force_upload or config.sync_delete:
+        # Cache is beneficial when:
+        # - Smart sync mode (need file comparisons)
+        # - Sync deletion enabled (need list of SharePoint files)
+        print("="*60)
+        print("[4/5] BUILDING METADATA CACHE")
+        print("="*60)
+        try:
+            from sharepoint_sync.graph_api import build_sharepoint_cache
+
+            sharepoint_cache = build_sharepoint_cache(
+                config.upload_path,
+                config.tenant_url,
+                config.tenant_id,
+                config.client_id,
+                config.client_secret,
+                config.login_endpoint,
+                config.graph_endpoint,
+                filehash_column_available
+            )
+        except Exception as cache_error:
+            # Cache building failed - not fatal, will fall back to individual API queries
+            print(f"[!] Warning: Failed to build SharePoint cache: {cache_error}")
+            print("[!] Falling back to individual API queries (slower but still functional)")
+            sharepoint_cache = None
+
+    # ============================================================
+    # [5/5] FILE PROCESSING
+    # ============================================================
+    print("="*60)
+    print("[5/5] FILE PROCESSING")
+    print("="*60)
+
     # Parallel upload - process all files concurrently
     # Track converted files to avoid uploading .md files when .html versions exist
     converted_md_files = set()
-
-    # Show parallel processing info
-    print(f"[OK] Using parallel processing (Upload workers: {config.max_upload_workers})")
 
     # Initialize parallel uploader with auto-detected workers
     parallel_uploader = ParallelUploader(
@@ -1105,12 +1186,13 @@ def main():
         config,
         filehash_column_available,
         library_name,
-        converted_md_files
+        converted_md_files,
+        sharepoint_cache  # Pass cache for instant file lookups
     )
 
     # Perform sync deletion if enabled
     if config.sync_delete:
-        perform_sync_deletion(local_files, base_path, config)
+        perform_sync_deletion(local_files, base_path, config, sharepoint_cache)
 
     # Print final summary report
     # Pass whatif mode status for proper deletion statistics labeling

@@ -263,14 +263,19 @@ def should_exclude_path(path, exclude_patterns):
 def check_file_needs_update(local_path, file_name, site_url, list_name, filehash_column_available,
                             tenant_id=None, client_id=None, client_secret=None, login_endpoint=None,
                             graph_endpoint=None, upload_stats_dict=None, pre_calculated_hash=None, display_path=None,
-                            site_id=None, drive_id=None, parent_item_id=None):
+                            site_id=None, drive_id=None, parent_item_id=None, sharepoint_cache=None):
     """
     Check if a file in SharePoint needs to be updated by comparing hash or size.
 
     This function implements efficient file comparison to avoid unnecessary uploads.
     Files are compared using:
-    1. FileHash (xxHash128) if column exists - most reliable
-    2. Size comparison as fallback - works without custom columns
+    1. Cache lookup (if cache provided) - fastest, no API calls
+    2. FileHash (xxHash128) via API if column exists - most reliable
+    3. Size comparison as fallback - works without custom columns
+
+    Performance:
+        - With cache: Instant lookup, 0 API calls
+        - Without cache: 1 API call per file check
 
     Args:
         local_path (str): Path to the local file
@@ -291,6 +296,9 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
         site_id (str, optional): SharePoint site ID for path-based queries (preferred method)
         drive_id (str, optional): SharePoint drive ID for path-based queries (preferred method)
         parent_item_id (str, optional): Parent folder item ID for path-based queries (preferred method)
+        sharepoint_cache (dict, optional): Pre-built cache of SharePoint file metadata
+                                          Format: {"path/to/file.html": {"file_hash": "...", "size": 123, ...}}
+                                          If None, falls back to individual API queries
 
     Returns:
         tuple: (needs_update: bool, exists: bool, remote_file: None, local_hash: str or None)
@@ -300,13 +308,19 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
             - local_hash: The calculated or provided hash of the file
 
     Example:
+        # With cache (recommended for bulk operations)
+        cache = build_sharepoint_cache(...)
+        needs_update, exists, remote, hash_val = check_file_needs_update(
+            "/path/to/file.pdf", "file.pdf", "site.sharepoint.com", "Documents", True,
+            sharepoint_cache=cache
+        )
+
+        # Without cache (falls back to API)
         needs_update, exists, remote, hash_val = check_file_needs_update(
             "/path/to/file.pdf", "file.pdf", "site.sharepoint.com", "Documents", True,
             tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
             site_id=site_id, drive_id=drive_id, parent_item_id=parent_item_id
         )
-        if not needs_update:
-            print("File is up to date, skipping")
     """
 
     # Sanitize the file name to match what would be stored in SharePoint
@@ -334,6 +348,130 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
     if is_debug_enabled():
         display_name = display_path if display_path else sanitized_name
         print(f"[?] Checking if file exists in SharePoint: {display_name}")
+
+    # ============================================================================
+    # CACHE LOOKUP (if available) - fastest path, no API calls
+    # ============================================================================
+    if sharepoint_cache is not None and display_path:
+        # Try cache lookup using display_path (relative path)
+        cached_file = sharepoint_cache.get(display_path)
+
+        if cached_file:
+            # Cache hit! Use cached metadata instead of API call
+            if upload_stats_dict:
+                if hasattr(upload_stats_dict, 'increment'):
+                    upload_stats_dict.increment('cache_hits')
+                else:
+                    upload_stats_dict['cache_hits'] = upload_stats_dict.get('cache_hits', 0) + 1
+
+            if is_debug_enabled():
+                print(f"[CACHE HIT] Found {display_path} in cache")
+
+            cached_hash = cached_file.get('file_hash')
+            cached_size = cached_file.get('size')
+            list_item_id = cached_file.get('list_item_id')
+
+            # Try hash comparison first if available
+            if filehash_column_available and cached_hash and local_hash:
+                if upload_stats_dict:
+                    if hasattr(upload_stats_dict, 'increment'):
+                        upload_stats_dict.increment('compared_by_hash')
+                    else:
+                        upload_stats_dict['compared_by_hash'] = upload_stats_dict.get('compared_by_hash', 0) + 1
+
+                if cached_hash == local_hash:
+                    # Hash match - file unchanged
+                    if is_debug_enabled():
+                        print(f"[=] File unchanged (cached hash match): {display_path}")
+                    if upload_stats_dict:
+                        upload_stats_dict['skipped_files'] += 1
+                        upload_stats_dict['bytes_skipped'] += local_size
+                        if hasattr(upload_stats_dict, 'increment'):
+                            upload_stats_dict.increment('hash_matched')
+                        else:
+                            upload_stats_dict['hash_matched'] = upload_stats_dict.get('hash_matched', 0) + 1
+                    return False, True, None, local_hash
+                else:
+                    # Hash mismatch - file changed
+                    if is_debug_enabled():
+                        print(f"[*] File changed (cached hash mismatch): {display_path}")
+                    return True, True, None, local_hash
+
+            # Fall back to size comparison if hash not available
+            elif cached_size is not None:
+                if upload_stats_dict:
+                    if hasattr(upload_stats_dict, 'increment'):
+                        upload_stats_dict.increment('compared_by_size')
+                    else:
+                        upload_stats_dict['compared_by_size'] = upload_stats_dict.get('compared_by_size', 0) + 1
+
+                if cached_size == local_size:
+                    # Size match - likely unchanged
+                    if is_debug_enabled():
+                        print(f"[=] File unchanged (cached size match): {display_path}")
+                    if upload_stats_dict:
+                        upload_stats_dict['skipped_files'] += 1
+                        upload_stats_dict['bytes_skipped'] += local_size
+
+                    # Backfill empty FileHash if column exists
+                    if (filehash_column_available and not cached_hash and local_hash and
+                        list_item_id and site_url and list_name):
+                        if is_debug_enabled():
+                            print(f"[#] Backfilling empty FileHash for cached file: {display_path}")
+                        try:
+                            from .graph_api import update_sharepoint_list_item_field
+                            success = update_sharepoint_list_item_field(
+                                site_url, list_name, list_item_id, 'FileHash', local_hash,
+                                tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                            )
+                            if success:
+                                if is_debug_enabled():
+                                    print(f"[✓] FileHash backfilled: {local_hash[:8]}...")
+                                if upload_stats_dict:
+                                    if hasattr(upload_stats_dict, 'increment'):
+                                        upload_stats_dict.increment('hash_backfilled')
+                                    else:
+                                        upload_stats_dict['hash_backfilled'] = upload_stats_dict.get('hash_backfilled', 0) + 1
+                            else:
+                                if upload_stats_dict:
+                                    if hasattr(upload_stats_dict, 'increment'):
+                                        upload_stats_dict.increment('hash_backfill_failed')
+                                    else:
+                                        upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
+                        except Exception:
+                            if upload_stats_dict:
+                                if hasattr(upload_stats_dict, 'increment'):
+                                    upload_stats_dict.increment('hash_backfill_failed')
+                                else:
+                                    upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
+
+                    return False, True, None, local_hash
+                else:
+                    # Size mismatch - file changed
+                    if is_debug_enabled():
+                        print(f"[*] File changed (cached size mismatch): {display_path}")
+                    return True, True, None, local_hash
+        else:
+            # Cache miss - file doesn't exist in SharePoint yet
+            if upload_stats_dict:
+                if hasattr(upload_stats_dict, 'increment'):
+                    upload_stats_dict.increment('cache_misses')
+                else:
+                    upload_stats_dict['cache_misses'] = upload_stats_dict.get('cache_misses', 0) + 1
+
+            if is_debug_enabled():
+                print(f"[CACHE MISS] {display_path} not found in cache (new file)")
+            return True, False, None, local_hash
+
+    # ============================================================================
+    # FALLBACK: Individual API query (when cache not available)
+    # ============================================================================
+    # Track API query (fallback when cache not available)
+    if upload_stats_dict:
+        if hasattr(upload_stats_dict, 'increment'):
+            upload_stats_dict.increment('api_queries')
+        else:
+            upload_stats_dict['api_queries'] = upload_stats_dict.get('api_queries', 0) + 1
 
     # Use Graph REST API to check file existence and get metadata
     # This replaces the Office365 library usage

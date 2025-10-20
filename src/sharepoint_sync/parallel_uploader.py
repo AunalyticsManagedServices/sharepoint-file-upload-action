@@ -73,7 +73,7 @@ class ParallelUploader:
         self.metadata_queue = BatchQueue(batch_size=20) if self.batch_metadata else None
 
     def process_files(self, local_files, site_id, drive_id, root_item_id, base_path, config,
-                     filehash_available, library_name, converted_md_files_set=None):
+                     filehash_available, library_name, converted_md_files_set=None, sharepoint_cache=None):
         """
         Process and upload files in parallel.
 
@@ -87,10 +87,14 @@ class ParallelUploader:
             filehash_available (bool): Whether FileHash column exists
             library_name (str): SharePoint library name
             converted_md_files_set (set): Set to track converted markdown files
+            sharepoint_cache (dict): Optional pre-built cache of SharePoint file metadata
 
         Returns:
             int: Number of failed uploads
         """
+        # Store cache for workers to access
+        self.sharepoint_cache = sharepoint_cache
+
         # Separate markdown files from regular files
         md_files = []
         regular_files = []
@@ -106,18 +110,25 @@ class ParallelUploader:
 
         # Process markdown files first (may need conversion)
         if md_files:
+            print(f"[*] Processing markdown files...")
             if is_debug_enabled():
-                print(f"[MD] Processing {len(md_files)} markdown files...")
+                print(f"[DEBUG] Converting {len(md_files)} markdown files in parallel...")
 
             failed_count += self._process_markdown_files_parallel(
                 md_files, site_id, drive_id, root_item_id, base_path, config,
                 filehash_available, library_name
             )
 
+            # Show summary after markdown processing
+            converted_count = len([f for f in md_files if f in self.converted_md_files])
+            if converted_count > 0:
+                print(f"[✓] Converted {converted_count} markdown files")
+
         # Process regular files in parallel
         if regular_files:
+            print(f"\n[*] Uploading files...")
             if is_debug_enabled():
-                print(f"[→] Uploading {len(regular_files)} files in parallel (workers: {self.max_workers})...")
+                print(f"[DEBUG] Uploading {len(regular_files)} files in parallel (workers: {self.max_workers})...")
 
             failed_count += self._upload_files_parallel(
                 regular_files, site_id, drive_id, root_item_id, base_path, config,
@@ -241,7 +252,8 @@ class ParallelUploader:
                     config.login_endpoint, config.graph_endpoint,
                     self.stats_wrapper,  # Thread-safe wrapper
                     config.max_retry,
-                    metadata_queue=self.metadata_queue  # Pass queue for batch updates
+                    metadata_queue=self.metadata_queue,  # Pass queue for batch updates
+                    sharepoint_cache=self.sharepoint_cache  # Pass cache for instant lookups
                 )
                 return True
 
@@ -399,7 +411,8 @@ class ParallelUploader:
                     self.stats_wrapper,
                     pre_calculated_hash=md_file_hash,  # Use source .md hash for comparison
                     display_path=sanitized_rel_path,
-                    site_id=site_id, drive_id=drive_id, parent_item_id=target_folder_id
+                    site_id=site_id, drive_id=drive_id, parent_item_id=target_folder_id,
+                    sharepoint_cache=self.sharepoint_cache  # Use cache for instant lookup
                 )
 
                 if not needs_update:
@@ -462,7 +475,8 @@ class ParallelUploader:
                         self.stats_wrapper, desired_name=desired_html_filename,
                         metadata_queue=self.metadata_queue,  # Pass queue for batch updates
                         pre_calculated_hash=md_file_hash,  # Use source .md file hash for comparison
-                        display_path=sanitized_rel_path  # Show full relative path in debug output
+                        display_path=sanitized_rel_path,  # Show full relative path in debug output
+                        sharepoint_cache=self.sharepoint_cache  # Pass cache for instant lookups
                     )
                     break
                 except Exception as e:

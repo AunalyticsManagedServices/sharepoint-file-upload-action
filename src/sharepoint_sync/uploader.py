@@ -402,7 +402,7 @@ def check_and_delete_existing_file(drive, file_name):
 def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force_upload, site_url, list_name,
                 filehash_column_available, tenant_id, client_id, client_secret,
                 login_endpoint, graph_endpoint, upload_stats_dict, desired_name=None,
-                metadata_queue=None, pre_calculated_hash=None, display_path=None):
+                metadata_queue=None, pre_calculated_hash=None, display_path=None, sharepoint_cache=None):
     """
     Upload a file to SharePoint using Graph API, intelligently skipping unchanged files.
 
@@ -426,6 +426,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         metadata_queue: Optional BatchQueue for batching metadata updates (parallel mode)
         pre_calculated_hash (str): Optional pre-calculated hash to use (for converted markdown using source .md hash)
         display_path (str): Optional relative path for display in debug output (e.g., 'docs/api/README.html')
+        sharepoint_cache (dict): Optional pre-built cache of SharePoint file metadata (eliminates API calls for comparison)
     """
     # Use desired_name if provided (for HTML conversions), otherwise use actual filename
     file_name = desired_name if desired_name else os.path.basename(local_path)
@@ -440,14 +441,15 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
 
     # First, check if the file needs updating (unless forced)
     if not force_upload:
-        # Note: check_file_needs_update now uses Graph API internally
+        # Note: check_file_needs_update now uses Graph API internally or cache lookup
         # Pass pre_calculated_hash if provided (for converted markdown using source .md hash)
         # Pass site_id, drive_id, parent_item_id for path-based queries (fixes duplicate filename bug)
+        # Pass sharepoint_cache for instant lookups (eliminates API calls)
         needs_update, exists, remote_file, local_hash = check_file_needs_update(
             local_path, file_name, site_url, list_name,
             filehash_column_available, tenant_id, client_id, client_secret,
             login_endpoint, graph_endpoint, upload_stats_dict, pre_calculated_hash, display_path,
-            site_id, drive_id, parent_item_id
+            site_id, drive_id, parent_item_id, sharepoint_cache
         )
 
         # If file doesn't need updating, skip it
@@ -690,7 +692,8 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
 def upload_file_with_structure(site_id, drive_id, root_item_id, local_file_path, base_path, site_url, list_name,
                                 chunk_size, force_upload, filehash_column_available,
                                 tenant_id, client_id, client_secret, login_endpoint,
-                                graph_endpoint, upload_stats_dict, max_retry=3, metadata_queue=None):
+                                graph_endpoint, upload_stats_dict, max_retry=3, metadata_queue=None,
+                                sharepoint_cache=None):
     """
     Upload a file maintaining its directory structure using Graph API.
 
@@ -713,6 +716,7 @@ def upload_file_with_structure(site_id, drive_id, root_item_id, local_file_path,
         upload_stats_dict (dict): Dictionary to track upload statistics
         max_retry (int): Maximum number of retry attempts (default: 3)
         metadata_queue: Optional BatchQueue for batching metadata updates (parallel mode)
+        sharepoint_cache (dict): Optional pre-built cache of SharePoint file metadata
     """
     # Get the relative path of the file
     if base_path:
@@ -758,7 +762,7 @@ def upload_file_with_structure(site_id, drive_id, root_item_id, local_file_path,
                 site_url, list_name, filehash_column_available,
                 tenant_id, client_id, client_secret, login_endpoint,
                 graph_endpoint, upload_stats_dict, metadata_queue=metadata_queue,
-                display_path=display_path
+                display_path=display_path, sharepoint_cache=sharepoint_cache
             )
             break
         except Exception as e:

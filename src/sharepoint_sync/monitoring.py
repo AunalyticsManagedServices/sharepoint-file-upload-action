@@ -33,17 +33,48 @@ class RateLimitMonitor:
         }
         self.throttle_threshold = 0.8  # Alert when >80% of limit
 
-    def analyze_response_headers(self, response):
+        # Track API request types
+        self.request_types = {
+            'GET': 0,
+            'POST': 0,
+            'PUT': 0,
+            'PATCH': 0,
+            'DELETE': 0
+        }
+
+        # Track API operation types
+        self.operations = {
+            'file_upload': 0,           # PUT to /content endpoint
+            'file_delete': 0,           # DELETE file
+            'metadata_get': 0,          # GET file/folder metadata
+            'metadata_update': 0,       # PATCH list item fields
+            'folder_create': 0,         # POST create folder
+            'batch_operation': 0,       # POST to $batch endpoint
+            'cache_build': 0,           # GET with $expand for caching
+            'other': 0                  # Other operations
+        }
+
+    def analyze_response_headers(self, response, method=None, url=None):
         """
         Analyze Graph API response headers for rate limiting info.
 
         Args:
             response: requests.Response object from Graph API call
+            method (str): HTTP method (GET, POST, PUT, PATCH, DELETE)
+            url (str): Request URL for operation type detection
 
         Returns:
             dict: Rate limiting information extracted from headers
         """
         self.metrics['total_requests'] += 1
+
+        # Track request method type
+        if method and method.upper() in self.request_types:
+            self.request_types[method.upper()] += 1
+
+        # Track operation type based on URL and method
+        if url and method:
+            self._categorize_operation(url, method.upper())
 
         headers = response.headers
         throttle_percentage = headers.get('x-ms-throttle-limit-percentage')
@@ -89,6 +120,41 @@ class RateLimitMonitor:
             'throttle_scope': throttle_scope,
             'is_throttled': response.status_code == 429
         }
+
+    def _categorize_operation(self, url, method):
+        """
+        Categorize API operation based on URL pattern and HTTP method.
+
+        Args:
+            url (str): Request URL
+            method (str): HTTP method (GET, POST, PUT, PATCH, DELETE)
+        """
+        url_lower = url.lower()
+
+        # File upload operations
+        if method == 'PUT' and '/content' in url_lower:
+            self.operations['file_upload'] += 1
+        # File delete operations
+        elif method == 'DELETE' and '/items/' in url_lower:
+            self.operations['file_delete'] += 1
+        # Metadata update operations
+        elif method == 'PATCH' and '/listitem' in url_lower:
+            self.operations['metadata_update'] += 1
+        # Folder creation
+        elif method == 'POST' and '/children' in url_lower:
+            self.operations['folder_create'] += 1
+        # Batch operations
+        elif method == 'POST' and '$batch' in url_lower:
+            self.operations['batch_operation'] += 1
+        # Cache building operations (GET with $expand)
+        elif method == 'GET' and '$expand=listitem' in url_lower:
+            self.operations['cache_build'] += 1
+        # Metadata retrieval operations
+        elif method == 'GET' and ('/items/' in url_lower or '/drives/' in url_lower):
+            self.operations['metadata_get'] += 1
+        # Other operations
+        else:
+            self.operations['other'] += 1
 
     def get_metrics_summary(self):
         """
@@ -147,6 +213,22 @@ def print_rate_limiting_summary():
     print(f"   - Resource Units Used:      {metrics['resource_units_consumed']:>6}")
     print(f"   - Alerts Triggered:         {metrics['alerts_triggered']:>6}")
 
+    # Request method breakdown
+    if any(rate_monitor.request_types.values()):
+        print(f"\n[API] Request Methods:")
+        for method, count in rate_monitor.request_types.items():
+            if count > 0:
+                print(f"   - {method:<8} requests:      {count:>6}")
+
+    # Operation type breakdown
+    if any(rate_monitor.operations.values()):
+        print(f"\n[OPS] Operation Types:")
+        for op_type, count in rate_monitor.operations.items():
+            if count > 0:
+                # Format operation name nicely
+                op_name = op_type.replace('_', ' ').title()
+                print(f"   - {op_name:<20} {count:>6}")
+
     # Status indicator based on throttling severity
     if metrics['max_throttle_percentage'] >= 1.0:
         print(f"\n[!] WARNING: Hit throttling limits during execution")
@@ -181,7 +263,11 @@ class UploadStatistics:
             'hash_empty_found': 0,     # Files with empty FileHash (column exists but value is None)
             'hash_column_unavailable': 0,  # Files checked when FileHash column doesn't exist
             'hash_backfilled': 0,      # Files with hash backfilled (not re-uploaded)
-            'hash_backfill_failed': 0  # Failed backfill attempts
+            'hash_backfill_failed': 0,  # Failed backfill attempts
+            # Cache performance statistics
+            'cache_hits': 0,          # Successful cache lookups (avoided API call)
+            'cache_misses': 0,        # Files not in cache (new files)
+            'api_queries': 0          # API queries needed (fallback when cache unavailable)
         }
 
     def print_summary(self, total_files, whatif_mode=False):
@@ -237,6 +323,24 @@ class UploadStatistics:
                 print(f"   - Hash save failures:       {self.stats['hash_save_failed']:>6}")
             if self.stats['hash_backfill_failed'] > 0:
                 print(f"   - Backfill failures:        {self.stats['hash_backfill_failed']:>6}")
+
+        # Show cache performance statistics if cache was used
+        total_cache_ops = self.stats.get('cache_hits', 0) + self.stats.get('cache_misses', 0)
+        if total_cache_ops > 0:
+            print(f"\n[CACHE] Cache Performance:")
+            cache_hits = self.stats.get('cache_hits', 0)
+            cache_misses = self.stats.get('cache_misses', 0)
+            api_queries = self.stats.get('api_queries', 0)
+
+            print(f"   - Cache hits:               {cache_hits:>6}")
+            print(f"   - Cache misses:             {cache_misses:>6}")
+            if api_queries > 0:
+                print(f"   - API queries (fallback):   {api_queries:>6}")
+
+            # Calculate cache efficiency
+            if total_cache_ops > 0:
+                cache_efficiency = (cache_hits / total_cache_ops) * 100
+                print(f"   - Cache efficiency:         {cache_efficiency:>5.1f}% (API calls avoided)")
 
         print(f"\n[DATA] Transfer Summary:")
         print(f"   - Data uploaded:   {format_bytes(self.stats['bytes_uploaded'])}")
