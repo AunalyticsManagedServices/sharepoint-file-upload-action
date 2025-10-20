@@ -494,13 +494,13 @@ class ParallelUploader:
         if remaining:
             # Add delay for complex file types to allow SharePoint processing to complete
             # Different file types need processing time: virus scan, content indexing, conversion, sanitization
-            html_count = sum(1 for _, filename, _, _, _ in remaining
+            html_count = sum(1 for _, filename, _, _, _, _ in remaining
                            if filename.lower().endswith('.html'))
-            pdf_count = sum(1 for _, filename, _, _, _ in remaining
+            pdf_count = sum(1 for _, filename, _, _, _, _ in remaining
                           if filename.lower().endswith('.pdf'))
-            office_count = sum(1 for _, filename, _, _, _ in remaining
+            office_count = sum(1 for _, filename, _, _, _, _ in remaining
                               if any(filename.lower().endswith(ext) for ext in ['.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt']))
-            image_count = sum(1 for _, filename, _, _, _ in remaining
+            image_count = sum(1 for _, filename, _, _, _, _ in remaining
                              if any(filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.tiff']))
             complex_count = html_count + pdf_count + office_count + image_count
             total_count = len(remaining)
@@ -530,7 +530,7 @@ class ParallelUploader:
         Process batch of metadata updates.
 
         Args:
-            batch (list): List of (item_id, filename, hash_value, is_file_update, display_path) tuples
+            batch (list): List of (parent_item_id, filename, item_id, hash_value, is_update, display_path) tuples
             config: Configuration object
             library_name (str): SharePoint library name
         """
@@ -540,17 +540,17 @@ class ParallelUploader:
         if not batch:
             return
 
-        if is_debug_enabled():
-            print(f"[#] Batch updating {len(batch)} FileHash values...")
+        print(f"[#] Batch updating {len(batch)} FileHash values...")
 
-        # Extract update type info before sending to batch API
-        # Map item_id to is_file_update flag
-        update_types = {item_id: is_update for item_id, _, _, is_update, _ in batch}
+        # Extract update type info for statistics tracking
+        update_types = {}
+        for parent_id, filename, item_id, _, is_update, _ in batch:
+            update_types[item_id] = is_update
 
         # Convert batch to format expected by batch_update_filehash_fields
-        # It expects (item_id, filename, hash_value, display_path) tuples
+        # Format: (item_id, filename, hash_value, display_path)
         api_batch = [(item_id, filename, hash_value, display_path)
-                     for item_id, filename, hash_value, _, display_path in batch]
+                     for _, filename, item_id, hash_value, _, display_path in batch]
 
         try:
             results = batch_update_filehash_fields(
@@ -559,47 +559,26 @@ class ParallelUploader:
                 config.login_endpoint, config.graph_endpoint
             )
 
-            # Debug: Show what we got back
-            if is_debug_enabled():
-                total_results = len(results)
-                success_count = sum(1 for success in results.values() if success)
-                failed_count = total_results - success_count
-                print(f"[DEBUG] batch_update_filehash_fields returned {total_results} results: {success_count} succeeded, {failed_count} failed")
-
-            # Collect ALL failed items for potential retry (not just HTML)
+            # Update statistics based on results
+            success_count = 0
             failed_items = []
 
-            # Create a lookup map for the original batch items
-            # This ensures we can find all items efficiently
-            batch_lookup = {}
-            for orig_item_id, filename, hash_value, is_update, display_path in batch:
-                # Convert to string to ensure consistent comparison
-                batch_lookup[str(orig_item_id)] = (filename, hash_value, is_update, display_path)
-
-            # Update statistics based on results and update type
-            for item_id, success in results.items():
-                # Convert to string for consistent comparison
-                item_id_str = str(item_id)
+            for parent_id, filename, item_id, hash_value, is_update, display_path in batch:
+                success = results.get(item_id, False)
 
                 if success:
-                    # Track based on whether this was new file or update
-                    is_update = update_types.get(item_id, False)
+                    success_count += 1
                     if is_update:
                         self.stats_wrapper.increment('hash_updated')
                     else:
                         self.stats_wrapper.increment('hash_new_saved')
                 else:
-                    # Collect ALL failed items for retry (not just HTML)
-                    if item_id_str in batch_lookup:
-                        filename, hash_value, is_update, display_path = batch_lookup[item_id_str]
-                        failed_items.append((item_id, filename, hash_value, is_update, display_path))
-                    else:
-                        # Item not found in batch_lookup - this shouldn't happen but log it
-                        if is_debug_enabled():
-                            print(f"[DEBUG] Warning: Failed item_id {item_id} (str: {item_id_str}) not found in batch lookup")
-                            print(f"[DEBUG] Batch lookup keys: {list(batch_lookup.keys())[:5]}...")  # Show first 5 keys
-
+                    # Store parent_id and filename for re-querying item_id on retry
+                    failed_items.append((parent_id, filename, hash_value, is_update, display_path))
                     self.stats_wrapper.increment('hash_save_failed')
+
+            if is_debug_enabled():
+                print(f"[✓] Batch update: {success_count}/{len(batch)} succeeded")
 
             # Categorize failed items by file type for appropriate retry delays
             if failed_items:
@@ -625,34 +604,42 @@ class ParallelUploader:
                 else:
                     retry_delay = 8  # Shorter delay for simpler files (text, scripts, etc.)
 
-                if is_debug_enabled():
-                    print(f"[⏱] {len(failed_items)} files failed (likely still processing).")
-                    print(f"    Waiting {retry_delay} seconds before retry...")
-                else:
-                    print(f"[⏱] {len(failed_items)} files need retry after processing delay...")
+                print(f"[⏱] {len(failed_items)} files need retry. Waiting {retry_delay} seconds...")
                 time.sleep(retry_delay)
 
-                print(f"[#] Retrying {len(failed_items)} failed FileHash updates...")
+                print(f"[#] Retrying {len(failed_items)} failed FileHash updates (re-querying item IDs)...")
 
-                # Prepare retry batch (with display_path for better debug output)
-                retry_api_batch = [(item_id, filename, hash_value, display_path)
-                                  for item_id, filename, hash_value, _, display_path in failed_items]
+                # Re-query fresh item IDs for failed files only
+                from .graph_api import get_drive_item_by_path_with_list_item
+                retry_batch = []
+
+                for parent_id, filename, hash_value, is_update, display_path in failed_items:
+                    try:
+                        # Query fresh item ID using path
+                        # Note: We need site_id and drive_id - get from first successful query or config
+                        # For now, rely on batch_update_filehash_fields to handle this
+                        # Store as None to indicate it needs re-query
+                        retry_batch.append((parent_id, filename, None, hash_value, is_update, display_path))
+                    except Exception as e:
+                        if is_debug_enabled():
+                            print(f"[DEBUG] Failed to prepare retry for {display_path}: {str(e)[:100]}")
 
                 try:
+                    # Pass batch with None item_ids to indicate they need re-querying
                     retry_results = batch_update_filehash_fields(
-                        config.tenant_url, library_name, retry_api_batch,
+                        config.tenant_url, library_name, retry_batch,
                         config.tenant_id, config.client_id, config.client_secret,
-                        config.login_endpoint, config.graph_endpoint, batch_size=10  # Smaller batch size for retries
+                        config.login_endpoint, config.graph_endpoint, batch_size=10,
+                        requery_item_ids=True  # Signal to re-query item IDs
                     )
 
                     # Update statistics for retry results
                     retry_success_count = 0
-                    for item_id, filename, hash_value, is_update, display_path in failed_items:
-                        if retry_results.get(item_id, False):
+                    for idx, (parent_id, filename, _, hash_value, is_update, display_path) in enumerate(retry_batch):
+                        # Results keyed by original index or identifier
+                        if retry_results.get(idx, False):
                             retry_success_count += 1
-                            # Correct the statistics: remove 1 from failed, add to succeeded
                             self.stats_wrapper.decrement('hash_save_failed')
-
                             if is_update:
                                 self.stats_wrapper.increment('hash_updated')
                             else:
@@ -661,65 +648,38 @@ class ParallelUploader:
                     if retry_success_count > 0:
                         print(f"[✓] Retry successful for {retry_success_count}/{len(failed_items)} files")
 
-                    # If some still failed, try one more time with even longer delay
+                    # If some still failed, try one more time
                     if retry_success_count < len(failed_items):
-                        still_failed_items = []
-                        for item_id, filename, hash_value, is_update, display_path in failed_items:
-                            if not retry_results.get(item_id, False):
-                                still_failed_items.append((item_id, filename, hash_value, is_update, display_path))
+                        still_failed = [
+                            retry_batch[idx] for idx in range(len(retry_batch))
+                            if not retry_results.get(idx, False)
+                        ]
 
-                        if still_failed_items:
-                            # Check what types of files are still failing
-                            still_html = sum(1 for _, f, _, _, _ in still_failed_items if f.lower().endswith('.html'))
-                            still_office_pdf = sum(1 for _, f, _, _, _ in still_failed_items
-                                              if any(f.lower().endswith(ext) for ext in ['.pdf', '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt']))
-                            still_images = sum(1 for _, f, _, _, _ in still_failed_items
-                                             if any(f.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.tiff']))
-                            still_other = len(still_failed_items) - still_html - still_office_pdf - still_images
-
-                            print(f"[⏱] {len(still_failed_items)} files still failing. Final retry in 20 seconds...")
-                            if is_debug_enabled():
-                                type_breakdown = []
-                                if still_html > 0:
-                                    type_breakdown.append(f"{still_html} HTML")
-                                if still_office_pdf > 0:
-                                    type_breakdown.append(f"{still_office_pdf} Office/PDF")
-                                if still_images > 0:
-                                    type_breakdown.append(f"{still_images} images")
-                                if still_other > 0:
-                                    type_breakdown.append(f"{still_other} other")
-                                if type_breakdown:
-                                    print(f"    ({', '.join(type_breakdown)})")
+                        if still_failed:
+                            print(f"[⏱] {len(still_failed)} files still failing. Final retry in 20 seconds...")
                             time.sleep(20)
 
-                            print(f"[#] Final retry for {len(still_failed_items)} files...")
-                            final_retry_batch = [(item_id, filename, hash_value, display_path)
-                                                for item_id, filename, hash_value, _, display_path in still_failed_items]
+                            print(f"[#] Final retry for {len(still_failed)} files...")
 
                             try:
                                 final_results = batch_update_filehash_fields(
-                                    config.tenant_url, library_name, final_retry_batch,
+                                    config.tenant_url, library_name, still_failed,
                                     config.tenant_id, config.client_id, config.client_secret,
-                                    config.login_endpoint, config.graph_endpoint, batch_size=5  # Even smaller batches
+                                    config.login_endpoint, config.graph_endpoint, batch_size=5,
+                                    requery_item_ids=True
                                 )
 
-                                final_success_count = 0
-                                for item_id, filename, hash_value, is_update, display_path in still_failed_items:
-                                    if final_results.get(item_id, False):
-                                        final_success_count += 1
-                                        # Correct the statistics
-                                        self.stats_wrapper.decrement('hash_save_failed')
-                                        if is_update:
-                                            self.stats_wrapper.increment('hash_updated')
-                                        else:
-                                            self.stats_wrapper.increment('hash_new_saved')
+                                final_success_count = sum(1 for success in final_results.values() if success)
 
                                 if final_success_count > 0:
-                                    print(f"[✓] Final retry successful for {final_success_count}/{len(still_failed_items)} files")
+                                    print(f"[✓] Final retry successful for {final_success_count}/{len(still_failed)} files")
+                                    # Correct statistics
+                                    for _ in range(final_success_count):
+                                        self.stats_wrapper.decrement('hash_save_failed')
 
-                                final_failed = len(still_failed_items) - final_success_count
+                                final_failed = len(still_failed) - final_success_count
                                 if final_failed > 0:
-                                    print(f"[!] {final_failed} files still failed after all retries (SharePoint may need more time)")
+                                    print(f"[!] {final_failed} files still failed after all retries")
 
                             except Exception as final_error:
                                 print(f"[!] Final retry failed: {str(final_error)[:200]}")
