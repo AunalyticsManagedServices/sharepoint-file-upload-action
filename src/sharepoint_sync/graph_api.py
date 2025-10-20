@@ -2090,8 +2090,11 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
         results = {}
         total_batches = (len(updates_list) + batch_size - 1) // batch_size
 
-        if debug_metadata:
+        if debug_metadata or is_debug_enabled():
             print(f"[DEBUG] Processing {len(updates_list)} updates in {total_batches} batches")
+            # Show first few item IDs to process
+            all_item_ids = [str(item_id) for item_id, _, _, _ in updates_list]
+            print(f"[DEBUG] All item IDs to process: {all_item_ids[:5]}{'...' if len(all_item_ids) > 5 else ''} (total: {len(all_item_ids)})")
 
         for batch_num in range(0, len(updates_list), batch_size):
             batch = updates_list[batch_num:batch_num+batch_size]
@@ -2099,6 +2102,9 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
 
             if is_debug_enabled():
                 print(f"[#] Batch {batch_index}/{total_batches}: Updating {len(batch)} FileHash values...")
+                # Show the first few item IDs in this batch for debugging
+                batch_item_ids = [str(item_id) for item_id, _, _, _ in batch]
+                print(f"[DEBUG] Batch {batch_index} item IDs: {batch_item_ids[:3]}{'...' if len(batch_item_ids) > 3 else ''}")
 
             # Build JSON batch request
             batch_request = {
@@ -2128,14 +2134,24 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
 
                 if batch_response.status_code == 200:
                     # Process batch response
-                    batch_results = batch_response.json().get('responses', [])
+                    batch_data = batch_response.json()
+                    batch_results = batch_data.get('responses', [])
 
                     # Debug: Check if we got all responses
-                    if is_debug_enabled() and len(batch_results) != len(batch):
-                        print(f"[DEBUG] Warning: Expected {len(batch)} responses but got {len(batch_results)}")
+                    if is_debug_enabled():
+                        print(f"[DEBUG] Batch {batch_index}: Sent {len(batch)} requests, got {len(batch_results)} responses")
+                        if len(batch_results) != len(batch):
+                            print(f"[DEBUG] WARNING: Response count mismatch! Missing {len(batch) - len(batch_results)} responses")
+                            # Show which IDs we got back
+                            response_ids = [r.get('id') for r in batch_results]
+                            print(f"[DEBUG] Response IDs received: {response_ids}")
 
                     # Track how many items we process from this batch
                     batch_processed = 0
+                    results_before = len(results)
+
+                    if is_debug_enabled():
+                        print(f"[DEBUG] Results dictionary has {results_before} items before processing batch {batch_index}")
 
                     for result in batch_results:
                         try:
@@ -2153,6 +2169,9 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
                             results[item_id] = success
                             batch_processed += 1
 
+                            if is_debug_enabled() and batch_processed <= 2:  # Show first 2 items for debugging
+                                print(f"[DEBUG] Added item_id '{item_id}' to results (success={success})")
+
                             if debug_metadata:
                                 if success:
                                     # Show relative path and sanitized filename for better context
@@ -2166,15 +2185,23 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
 
                     # Ensure all items in batch are accounted for
                     if batch_processed < len(batch):
-                        print(f"[DEBUG] Warning: Only processed {batch_processed}/{len(batch)} items from batch {batch_index}")
+                        if is_debug_enabled():
+                            print(f"[DEBUG] Warning: Only processed {batch_processed}/{len(batch)} items from batch {batch_index}")
                         # Add missing items as failed
+                        missing_count = 0
                         for item_id, _, _, _ in batch:
                             if item_id not in results:
                                 results[item_id] = False
-                                if is_debug_enabled():
-                                    print(f"[DEBUG] Marking unprocessed item {item_id} as failed")
+                                missing_count += 1
+                                if is_debug_enabled() and missing_count <= 2:  # Show first 2 missing items
+                                    print(f"[DEBUG] Marking unprocessed item '{item_id}' as failed")
+                        if is_debug_enabled() and missing_count > 0:
+                            print(f"[DEBUG] Added {missing_count} missing items to results as failed")
 
                     if is_debug_enabled():
+                        results_after = len(results)
+                        items_added = results_after - results_before
+                        print(f"[DEBUG] Results dictionary has {results_after} items after batch {batch_index} (added {items_added})")
                         success_count = sum(1 for r in batch_results if 200 <= r['status'] < 300)
                         print(f"[✓] Batch {batch_index}: {success_count}/{len(batch)} updates succeeded")
 
@@ -2185,15 +2212,23 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
                         print(f"[DEBUG] Batch response: {batch_response.text[:500]}")
 
                     # Mark all items in this batch as failed
+                    results_before = len(results)
                     for item_id, _, _, _ in batch:
                         results[item_id] = False
+                    if is_debug_enabled():
+                        print(f"[DEBUG] Marked all {len(batch)} items in failed batch {batch_index} as failed")
+                        print(f"[DEBUG] Results dictionary: {results_before} -> {len(results)} items")
 
             except Exception as batch_error:
                 print(f"[!] Error processing batch {batch_index}: {str(batch_error)[:200]}")
 
                 # Mark all items in this batch as failed
+                results_before = len(results)
                 for item_id, _, _, _ in batch:
                     results[item_id] = False
+                if is_debug_enabled():
+                    print(f"[DEBUG] Marked all {len(batch)} items in exception batch {batch_index} as failed")
+                    print(f"[DEBUG] Results dictionary: {results_before} -> {len(results)} items")
 
         # Summary
         total_success = sum(results.values())
@@ -2203,9 +2238,20 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
             print(f"[DEBUG] Final results dictionary contains {len(results)} items")
             print(f"[#] Batch update summary: {total_success} succeeded, {total_failed} failed")
 
+            # Show which item IDs are actually in results
+            result_keys = list(results.keys())
+            print(f"[DEBUG] Results dictionary keys: {result_keys[:5]}{'...' if len(result_keys) > 5 else ''}")
+
             # Extra debug: Show if we're missing any items
             if len(results) != len(updates_list):
                 print(f"[DEBUG] WARNING: Started with {len(updates_list)} updates but only have {len(results)} results!")
+                # Show which IDs are missing
+                expected_ids = {str(item_id) for item_id, _, _, _ in updates_list}
+                actual_ids = {str(k) for k in results.keys()}
+                missing_ids = expected_ids - actual_ids
+                if missing_ids:
+                    missing_sample = list(missing_ids)[:5]
+                    print(f"[DEBUG] Missing IDs: {missing_sample}{'...' if len(missing_ids) > 5 else ''} (total: {len(missing_ids)} missing)")
 
         return results
 
