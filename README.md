@@ -815,7 +815,7 @@ The action uses **xxHash128** for lightning-fast change detection:
 [5/5] FILE PROCESSING
 ============================================================
 [*] Processing markdown files...
-[✓] Converted 12 markdown files
+[✓] Verified or converted 12 markdown files
 
 [*] Uploading files...
 

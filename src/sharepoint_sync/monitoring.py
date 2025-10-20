@@ -51,7 +51,9 @@ class RateLimitMonitor:
             'folder_create': 0,         # POST create folder
             'batch_operation': 0,       # POST to $batch endpoint
             'cache_build': 0,           # GET with $expand for caching
-            'other': 0                  # Other operations
+            'column_ops': 0,            # GET/POST to /columns endpoint
+            'site_list_info': 0,        # GET to /sites/ or /lists/ (no /items/)
+            'other': 0                  # Other unclassified operations
         }
 
     def analyze_response_headers(self, response, method=None, url=None):
@@ -149,6 +151,12 @@ class RateLimitMonitor:
         # Cache building operations (GET with $expand)
         elif method == 'GET' and '$expand=listitem' in url_lower:
             self.operations['cache_build'] += 1
+        # Column operations (checking/creating FileHash column)
+        elif '/columns' in url_lower:
+            self.operations['column_ops'] += 1
+        # Site/List info queries (not items or drives)
+        elif method == 'GET' and ('/sites/' in url_lower or '/lists/' in url_lower) and '/items/' not in url_lower and '/drives/' not in url_lower:
+            self.operations['site_list_info'] += 1
         # Metadata retrieval operations
         elif method == 'GET' and ('/items/' in url_lower or '/drives/' in url_lower):
             self.operations['metadata_get'] += 1
@@ -218,7 +226,7 @@ def print_rate_limiting_summary():
         print(f"\n[API] Request Methods:")
         for method, count in rate_monitor.request_types.items():
             if count > 0:
-                print(f"   - {method:<8} requests:      {count:>6}")
+                print(f"   - {f'{method} requests:':<27} {count:>6}")
 
     # Operation type breakdown
     if any(rate_monitor.operations.values()):
@@ -227,7 +235,7 @@ def print_rate_limiting_summary():
             if count > 0:
                 # Format operation name nicely
                 op_name = op_type.replace('_', ' ').title()
-                print(f"   - {op_name:<20} {count:>6}")
+                print(f"   - {f'{op_name}:':<27} {count:>6}")
 
     # Status indicator based on throttling severity
     if metrics['max_throttle_percentage'] >= 1.0:

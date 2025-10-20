@@ -749,8 +749,6 @@ def print_summary(total_files, whatif_mode=False):
         efficiency = (stats['skipped_files'] / total_processed) * 100
         print(f"\n[EFFICIENCY] {efficiency:.1f}% of files were already up-to-date")
 
-    print("="*60)
-
     # Display rate limiting statistics
     print_rate_limiting_summary()
 
@@ -1004,12 +1002,11 @@ def main():
     print(f"Upload Workers:            {config.max_upload_workers} (concurrent uploads)")
     print(f"Markdown Workers:          {config.max_markdown_workers} (parallel conversion)")
     print(f"Batch Metadata Updates:    Enabled (20 items/batch)")
-    print("="*60 + "\n")
 
     # ============================================================
     # [1/5] CONFIGURATION
     # ============================================================
-    print("="*60)
+    print("\n" + "="*60)
     print("[1/5] CONFIGURATION")
     print("="*60)
 
@@ -1044,7 +1041,7 @@ def main():
     # ============================================================
     # [2/5] FILE DISCOVERY
     # ============================================================
-    print("="*60)
+    print("\n" + "="*60)
     print("[2/5] FILE DISCOVERY")
     print("="*60)
     print(f"[*] Working directory: {os.getcwd()}")
@@ -1062,7 +1059,6 @@ def main():
         sys.exit(1)
 
     print(f"[✓] Found {len(local_files)} files to process")
-    print()
 
     # Calculate base path for maintaining folder structure
     base_path = calculate_base_path(local_files, local_dirs)
@@ -1070,7 +1066,7 @@ def main():
     # ============================================================
     # [3/5] SHAREPOINT CONNECTION
     # ============================================================
-    print("="*60)
+    print("\n" + "="*60)
     print("[3/5] SHAREPOINT CONNECTION")
     print("="*60)
     print("[*] Connecting to SharePoint...")
@@ -1114,8 +1110,6 @@ def main():
         else:
             print("[!] FileHash column not available, will use size-based comparison")
 
-        print()
-
     except Exception as conn_error:
         # Connection failed - provide helpful troubleshooting info
         print(f"[Error] Failed to connect to SharePoint: {conn_error}")
@@ -1136,7 +1130,7 @@ def main():
         # Cache is beneficial when:
         # - Smart sync mode (need file comparisons)
         # - Sync deletion enabled (need list of SharePoint files)
-        print("="*60)
+        print("\n" + "="*60)
         print("[4/5] BUILDING METADATA CACHE")
         print("="*60)
         try:
@@ -1161,7 +1155,7 @@ def main():
     # ============================================================
     # [5/5] FILE PROCESSING
     # ============================================================
-    print("="*60)
+    print("\n" + "="*60)
     print("[5/5] FILE PROCESSING")
     print("="*60)
 

@@ -122,7 +122,7 @@ class ParallelUploader:
             # Show summary after markdown processing
             converted_count = len([f for f in md_files if f in self.converted_md_files])
             if converted_count > 0:
-                print(f"[✓] Converted {converted_count} markdown files")
+                print(f"[✓] Verified or converted {converted_count} markdown files")
 
         # Process regular files in parallel
         if regular_files:
