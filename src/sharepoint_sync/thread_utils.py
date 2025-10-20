@@ -137,6 +137,17 @@ class ThreadSafeStatsWrapper:
         with self._lock:
             self._stats[key] = self._stats.get(key, 0) + value
 
+    def decrement(self, key, value=1):
+        """
+        Thread-safe decrement operation.
+
+        Args:
+            key (str): Statistics field to decrement
+            value (int/float): Amount to decrement by (default: 1)
+        """
+        with self._lock:
+            self._stats[key] = max(0, self._stats.get(key, 0) - value)  # Don't go below 0
+
     def add_bytes(self, key, bytes_count):
         """
         Thread-safe byte counter update.

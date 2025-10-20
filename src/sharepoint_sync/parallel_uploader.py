@@ -482,6 +482,18 @@ class ParallelUploader:
         # Get all remaining items
         remaining = self.metadata_queue.get_all_remaining()
         if remaining:
+            # Add delay for HTML files to allow SharePoint processing to complete
+            # HTML files need time for: virus scan, content indexing, sanitization
+            html_count = sum(1 for _, filename, _, _ in remaining
+                           if filename.lower().endswith('.html'))
+
+            if html_count > 0:
+                import time
+                delay_seconds = 5  # Give SharePoint time to process HTML files
+                if is_debug_enabled():
+                    print(f"[⏱] Waiting {delay_seconds} seconds for SharePoint to process {html_count} HTML files...")
+                time.sleep(delay_seconds)
+
             self._process_metadata_batch(remaining, config, library_name)
 
     def _process_metadata_batch(self, batch, config, library_name):
@@ -517,6 +529,9 @@ class ParallelUploader:
                 config.login_endpoint, config.graph_endpoint
             )
 
+            # Collect failed HTML files for potential retry
+            failed_html_items = []
+
             # Update statistics based on results and update type
             for item_id, success in results.items():
                 if success:
@@ -527,7 +542,59 @@ class ParallelUploader:
                     else:
                         self.stats_wrapper.increment('hash_new_saved')
                 else:
+                    # Check if this is an HTML file that failed
+                    for orig_item_id, filename, hash_value, is_update in batch:
+                        if orig_item_id == item_id and filename.lower().endswith('.html'):
+                            failed_html_items.append((item_id, filename, hash_value, is_update))
+                            break
+
                     self.stats_wrapper.increment('hash_save_failed')
+
+            # Retry failed HTML files after additional delay
+            # HTML files often fail with 409 because SharePoint is still processing them
+            if failed_html_items:
+                import time
+                retry_delay = 10  # Longer delay for retry
+                if is_debug_enabled():
+                    print(f"[⏱] {len(failed_html_items)} HTML files failed (likely still processing).")
+                    print(f"    Waiting {retry_delay} seconds before retry...")
+                time.sleep(retry_delay)
+
+                print(f"[#] Retrying {len(failed_html_items)} failed HTML FileHash updates...")
+
+                # Prepare retry batch (without the is_update flag for API call)
+                retry_api_batch = [(item_id, filename, hash_value)
+                                  for item_id, filename, hash_value, _ in failed_html_items]
+
+                try:
+                    retry_results = batch_update_filehash_fields(
+                        config.tenant_url, library_name, retry_api_batch,
+                        config.tenant_id, config.client_id, config.client_secret,
+                        config.login_endpoint, config.graph_endpoint
+                    )
+
+                    # Update statistics for retry results
+                    retry_success_count = 0
+                    for item_id, filename, hash_value, is_update in failed_html_items:
+                        if retry_results.get(item_id, False):
+                            retry_success_count += 1
+                            # Correct the statistics: remove 1 from failed, add to succeeded
+                            self.stats_wrapper.decrement('hash_save_failed')
+
+                            if is_update:
+                                self.stats_wrapper.increment('hash_updated')
+                            else:
+                                self.stats_wrapper.increment('hash_new_saved')
+
+                    if retry_success_count > 0:
+                        print(f"[✓] Retry successful for {retry_success_count}/{len(failed_html_items)} HTML files")
+
+                    if retry_success_count < len(failed_html_items):
+                        failed_count = len(failed_html_items) - retry_success_count
+                        print(f"[!] {failed_count} HTML files still failed after retry (may need manual update)")
+
+                except Exception as retry_error:
+                    print(f"[!] Retry batch update failed: {str(retry_error)[:200]}")
 
         except Exception as e:
             print(f"[!] Batch metadata update failed: {e}")
