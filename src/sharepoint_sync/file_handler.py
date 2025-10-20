@@ -408,7 +408,11 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
 
                             # Compare hashes - this is the most reliable comparison
                             if upload_stats_dict:
-                                upload_stats_dict['compared_by_hash'] = upload_stats_dict.get('compared_by_hash', 0) + 1
+                                # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                                if hasattr(upload_stats_dict, 'increment'):
+                                    upload_stats_dict.increment('compared_by_hash')
+                                else:
+                                    upload_stats_dict['compared_by_hash'] = upload_stats_dict.get('compared_by_hash', 0) + 1
 
                             if local_hash and local_hash == remote_hash:
                                 if is_debug_enabled():
@@ -416,7 +420,11 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                                 if upload_stats_dict:
                                     upload_stats_dict['skipped_files'] += 1
                                     upload_stats_dict['bytes_skipped'] += local_size
-                                    upload_stats_dict['hash_matched'] = upload_stats_dict.get('hash_matched', 0) + 1
+                                    # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                                    if hasattr(upload_stats_dict, 'increment'):
+                                        upload_stats_dict.increment('hash_matched')
+                                    else:
+                                        upload_stats_dict['hash_matched'] = upload_stats_dict.get('hash_matched', 0) + 1
                                 return False, True, None, local_hash
                             elif local_hash:
                                 if is_debug_enabled():
@@ -427,11 +435,19 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                             if debug_metadata:
                                 print(f"[DEBUG] FileHash not found in list item fields")
                             if upload_stats_dict:
-                                upload_stats_dict['hash_empty_found'] = upload_stats_dict.get('hash_empty_found', 0) + 1
+                                # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                                if hasattr(upload_stats_dict, 'increment'):
+                                    upload_stats_dict.increment('hash_empty_found')
+                                else:
+                                    upload_stats_dict['hash_empty_found'] = upload_stats_dict.get('hash_empty_found', 0) + 1
                     else:
                         # FileHash column doesn't exist at all
                         if upload_stats_dict:
-                            upload_stats_dict['hash_column_unavailable'] = upload_stats_dict.get('hash_column_unavailable', 0) + 1
+                            # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                            if hasattr(upload_stats_dict, 'increment'):
+                                upload_stats_dict.increment('hash_column_unavailable')
+                            else:
+                                upload_stats_dict['hash_column_unavailable'] = upload_stats_dict.get('hash_column_unavailable', 0) + 1
                 elif debug_metadata:
                     print(f"[DEBUG] Could not retrieve list item data for {sanitized_name}")
 
@@ -461,7 +477,11 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
 
             # Compare file sizes only (hash comparison not available)
             if upload_stats_dict:
-                upload_stats_dict['compared_by_size'] = upload_stats_dict.get('compared_by_size', 0) + 1
+                # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                if hasattr(upload_stats_dict, 'increment'):
+                    upload_stats_dict.increment('compared_by_size')
+                else:
+                    upload_stats_dict['compared_by_size'] = upload_stats_dict.get('compared_by_size', 0) + 1
 
             size_matches = (local_size == remote_size)
             needs_update = not size_matches
@@ -501,18 +521,30 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                             if is_debug_enabled():
                                 print(f"[✓] FileHash backfilled: {local_hash[:8]}...")
                             if upload_stats_dict:
-                                upload_stats_dict['hash_backfilled'] = upload_stats_dict.get('hash_backfilled', 0) + 1
+                                # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                                if hasattr(upload_stats_dict, 'increment'):
+                                    upload_stats_dict.increment('hash_backfilled')
+                                else:
+                                    upload_stats_dict['hash_backfilled'] = upload_stats_dict.get('hash_backfilled', 0) + 1
                         else:
                             if is_debug_enabled():
                                 print(f"[!] Failed to backfill FileHash")
                             if upload_stats_dict:
-                                upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
+                                # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                                if hasattr(upload_stats_dict, 'increment'):
+                                    upload_stats_dict.increment('hash_backfill_failed')
+                                else:
+                                    upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
 
                     except Exception as backfill_error:
                         if is_debug_enabled():
                             print(f"[!] Error backfilling FileHash: {str(backfill_error)[:200]}")
                         if upload_stats_dict:
-                            upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
+                            # Use atomic increment if available (parallel mode), otherwise use get/set pattern
+                            if hasattr(upload_stats_dict, 'increment'):
+                                upload_stats_dict.increment('hash_backfill_failed')
+                            else:
+                                upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
 
             else:
                 if is_debug_enabled():

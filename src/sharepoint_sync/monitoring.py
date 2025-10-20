@@ -221,9 +221,12 @@ class UploadStatistics:
                          self.stats['hash_backfilled'] + self.stats['hash_backfill_failed'])
         if total_hash_ops > 0:
             print(f"\n[HASH] FileHash Column Statistics:")
-            print(f"   - New hashes saved:         {self.stats['hash_new_saved']:>6}")
-            print(f"   - Hashes updated:           {self.stats['hash_updated']:>6}")
-            print(f"   - Hash matches (skipped):   {self.stats['hash_matched']:>6}")
+            if self.stats['hash_new_saved'] > 0:
+                print(f"   - New hashes saved:         {self.stats['hash_new_saved']:>6}")
+            if self.stats['hash_updated'] > 0:
+                print(f"   - Hashes updated:           {self.stats['hash_updated']:>6}")
+            if self.stats['hash_matched'] > 0:
+                print(f"   - Hash matches (skipped):   {self.stats['hash_matched']:>6}")
             if self.stats['hash_backfilled'] > 0:
                 print(f"   - Hashes backfilled:        {self.stats['hash_backfilled']:>6}")
             if self.stats['hash_empty_found'] > 0:
