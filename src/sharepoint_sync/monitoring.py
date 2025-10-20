@@ -177,7 +177,11 @@ class UploadStatistics:
             'hash_new_saved': 0,      # New files with hash saved
             'hash_updated': 0,         # Existing files with hash updated
             'hash_matched': 0,         # Files skipped due to hash match
-            'hash_save_failed': 0      # Failed to save hash to SharePoint
+            'hash_save_failed': 0,     # Failed to save hash to SharePoint
+            'hash_empty_found': 0,     # Files with empty FileHash (column exists but value is None)
+            'hash_column_unavailable': 0,  # Files checked when FileHash column doesn't exist
+            'hash_backfilled': 0,      # Files with hash backfilled (not re-uploaded)
+            'hash_backfill_failed': 0  # Failed backfill attempts
         }
 
     def print_summary(self, total_files, whatif_mode=False):
@@ -212,14 +216,24 @@ class UploadStatistics:
 
         # FileHash column operation statistics
         total_hash_ops = (self.stats['hash_new_saved'] + self.stats['hash_updated'] +
-                         self.stats['hash_matched'] + self.stats['hash_save_failed'])
+                         self.stats['hash_matched'] + self.stats['hash_save_failed'] +
+                         self.stats['hash_empty_found'] + self.stats['hash_column_unavailable'] +
+                         self.stats['hash_backfilled'] + self.stats['hash_backfill_failed'])
         if total_hash_ops > 0:
             print(f"\n[HASH] FileHash Column Statistics:")
             print(f"   - New hashes saved:         {self.stats['hash_new_saved']:>6}")
             print(f"   - Hashes updated:           {self.stats['hash_updated']:>6}")
             print(f"   - Hash matches (skipped):   {self.stats['hash_matched']:>6}")
+            if self.stats['hash_backfilled'] > 0:
+                print(f"   - Hashes backfilled:        {self.stats['hash_backfilled']:>6}")
+            if self.stats['hash_empty_found'] > 0:
+                print(f"   - Empty hash found:         {self.stats['hash_empty_found']:>6}")
+            if self.stats['hash_column_unavailable'] > 0:
+                print(f"   - Column unavailable:       {self.stats['hash_column_unavailable']:>6}")
             if self.stats['hash_save_failed'] > 0:
                 print(f"   - Hash save failures:       {self.stats['hash_save_failed']:>6}")
+            if self.stats['hash_backfill_failed'] > 0:
+                print(f"   - Backfill failures:        {self.stats['hash_backfill_failed']:>6}")
 
         print(f"\n[DATA] Transfer Summary:")
         print(f"   - Data uploaded:   {format_bytes(self.stats['bytes_uploaded'])}")

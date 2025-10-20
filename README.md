@@ -3,7 +3,7 @@
 > 🚀 Automatically sync files from GitHub to SharePoint with intelligent change detection and Markdown-to-HTML conversion
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-3.1.0-blue)](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action)
+[![Version](https://img.shields.io/badge/Version-4.3.0-blue)](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action)
 
 ## 📋 Quick Navigation
 
@@ -12,7 +12,7 @@
 | [Overview](#-overview) | [Required Parameters](#required-parameters) | [Smart Sync](#smart-sync-with-content-hashing) | [Troubleshooting](#-troubleshooting) |
 | [Quick Start](#-quick-start) | [Optional Parameters](#optional-parameters) | [Markdown Conversion](#markdown-conversion) | [Performance](#-performance) |
 | [Usage Examples](#-usage-examples) | [Glob Patterns](#file-glob-patterns) | [Sync Deletion](#sync-deletion) | [Security](#-security) |
-| | [Exclusion Patterns](#exclusion-patterns) | [Filename Sanitization](#filename-sanitization) | [Contributing](#-contributing) |
+| | [Exclusion Patterns](#exclusion-patterns) | [Filename Sanitization](#filename-sanitization) | [Version History](#-version-history) |
 
 ## 🎯 Overview
 
@@ -34,7 +34,8 @@ Seamlessly synchronize files from your GitHub repository to SharePoint document 
 | Feature | Description |
 |---------|-------------|
 | **Smart Sync** | xxHash128 content comparison skips unchanged files automatically |
-| **Markdown → HTML** | GitHub-flavored HTML with embedded Mermaid diagrams |
+| **FileHash Backfill** | Automatically populates empty hashes without re-uploading files |
+| **Markdown → HTML** | GitHub-flavored HTML with embedded Mermaid diagrams and rewritten links |
 | **Large Files** | Chunked upload for files >4MB with automatic retry logic |
 | **Folder Structure** | Maintains directory hierarchy from repository to SharePoint |
 | **Special Characters** | Auto-sanitizes filenames for SharePoint compatibility |
@@ -84,7 +85,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Upload to SharePoint
-        uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+        uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
         with:
           file_path: "**/*"
           host_name: "yourcompany.sharepoint.com"
@@ -181,6 +182,8 @@ Examples:
 | `sync_delete` | `false` | Delete SharePoint files not in repository |
 | `sync_delete_whatif` | `true` | Preview deletions without deleting |
 | `max_upload_workers` | `4` | Concurrent upload workers (1-10) |
+| `debug` | `false` | Enable general debug output |
+| `debug_metadata` | `false` | Enable metadata-specific debug output |
 | `login_endpoint` | `"login.microsoftonline.com"` | Azure AD endpoint |
 | `graph_endpoint` | `"graph.microsoft.com"` | Microsoft Graph endpoint |
 
@@ -228,11 +231,11 @@ max_retries: 1    # Fail fast
 #### `convert_md_to_html` - Markdown conversion
 
 - **Default**: `true` (auto-convert `.md` files)
-- **Output**: Styled HTML with GitHub formatting + Mermaid diagrams
+- **Output**: Styled HTML with GitHub formatting + Mermaid diagrams + rewritten internal links
 - **Use `false`** when you want raw `.md` files
 
 ```yaml
-convert_md_to_html: true   # README.md → README.html (styled)
+convert_md_to_html: true   # README.md → README.html (styled with links rewritten)
 convert_md_to_html: false  # README.md → README.md (as-is)
 ```
 
@@ -296,11 +299,61 @@ sync_delete_whatif: false  # Actually deletes
   - Decrease to 2-3 if experiencing throttling
   - Keep at 4 for most use cases
 
+⚠️ **IMPORTANT UPCOMING CHANGE (September 30, 2025)**:
+Microsoft will reduce per-app/per-user throttling limits to **HALF** the total per-tenant limit to prevent monopolization. This may impact high-volume upload scenarios. The default of 4 workers should remain safe, but monitor for increased 429 responses after September 2025.
+
 ```yaml
 max_upload_workers: 4   # Default (recommended)
-max_upload_workers: 8   # High-performance networks
+max_upload_workers: 8   # High-performance networks (risk throttling)
 max_upload_workers: 2   # Conservative (low throttling risk)
 ```
+
+#### `debug` - General debug output
+
+- **Default**: `false`
+- **Use `true`** to troubleshoot file processing decisions
+
+**When enabled, shows**:
+- File discovery and glob pattern results
+- Individual file upload vs skip decisions
+- Folder creation operations
+- Hash comparison details
+- Sync deletion path comparisons
+- Relative path calculations
+- Thread identifiers (`[Main]`, `[Upload-N]`, `[Convert-N]`)
+
+**When to enable**:
+- Troubleshooting why files are uploaded vs skipped
+- Debugging sync deletion unexpected deletions
+- Understanding base_path calculation
+- Verifying exclusion pattern matches
+- Tracing markdown to HTML conversion
+
+```yaml
+debug: true   # Enable general debug output
+```
+
+#### `debug_metadata` - Metadata debug output
+
+- **Default**: `false`
+- **Use `true`** only when debugging Graph API or SharePoint field issues
+
+**When enabled, shows**:
+- Graph API HTTP requests and responses
+- SharePoint list item field enumeration
+- Column existence checks
+- FileHash column value inspection
+- Internal column name mappings
+- Graph API batch request/response details
+- Rate limiting header analysis
+
+⚠️ **Warning**: Produces EXTREMELY verbose output. Only enable for specific metadata troubleshooting.
+
+```yaml
+debug_metadata: true   # Enable metadata debug (very verbose!)
+```
+
+💡 **Tip**: Both `debug` and `debug_metadata` can be enabled simultaneously for maximum diagnostic detail.
 
 #### `login_endpoint` / `graph_endpoint` - Cloud environments
 
@@ -433,7 +486,7 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
   uses: actions/checkout@v4
 
 - name: Sync All Files
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     file_path: "**/*"
     file_path_recursive_match: true
@@ -452,11 +505,11 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
   uses: actions/checkout@v4
 
 - name: Sync Documentation
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     file_path: "**/*.md"
     file_path_recursive_match: true
-    convert_md_to_html: true  # Converts to styled HTML
+    convert_md_to_html: true  # Converts to styled HTML with rewritten links
     host_name: "company.sharepoint.com"
     site_name: "KnowledgeBase"
     upload_path: "Documentation"
@@ -472,7 +525,7 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
   uses: actions/checkout@v4
 
 - name: Sync Clean Repository
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     file_path: "**/*"
     file_path_recursive_match: true
@@ -492,7 +545,7 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
   uses: actions/checkout@v4
 
 - name: Sync to GovCloud
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     file_path: "compliance/**/*"
     host_name: "agency.sharepoint.us"
@@ -512,7 +565,7 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
   uses: actions/checkout@v4
 
 - name: Full Sync with Deletion
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     file_path: "docs/**/*"
     file_path_recursive_match: true
@@ -579,18 +632,18 @@ Batch Metadata Updates:    Enabled (20 items/batch)
 
 ```yaml
 # Use defaults (recommended for most cases)
-- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     # ... other parameters
 
 # Adjust for high-performance environments
-- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     max_upload_workers: 8      # Increase concurrent uploads
     # ... other parameters
 
 # Conservative settings (minimize throttling risk)
-- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     max_upload_workers: 2      # Reduce concurrent requests
     # ... other parameters
@@ -617,9 +670,10 @@ The action uses **xxHash128** for lightning-fast change detection:
 
 **How it works:**
 1. Calculates hash for local file (3-6 GB/s processing speed)
-2. Compares with `FileHash` column in SharePoint
-3. Skips file if hash matches (unchanged)
-4. Uploads only new or modified files
+2. For converted markdown: Uses **source `.md` file hash** for comparison
+3. Compares with `FileHash` column in SharePoint
+4. Skips file if hash matches (unchanged)
+5. Uploads only new or modified files
 
 **Fallback:** Uses file size comparison if hash unavailable.
 
@@ -628,10 +682,11 @@ The action uses **xxHash128** for lightning-fast change detection:
 - 💾 Saves bandwidth and time
 - 🎯 More reliable than timestamps (especially in Docker/CI)
 - 📊 Detailed statistics show comparison methods and hash operations
+- 🔄 Automatic FileHash backfill for files with empty hashes
 
 **Statistics Tracked:**
 - **Comparison Methods**: Shows how many files were compared using hash vs size
-- **FileHash Operations**: Tracks new hashes saved, hashes updated, and hash matches
+- **FileHash Operations**: Tracks new hashes saved, hashes updated, hash matches, and backfills
 - **Efficiency Metrics**: Displays bandwidth saved and skip rate
 
 **Example Output:**
@@ -643,6 +698,7 @@ Processing files...
 [=] File unchanged (hash match): README.md
 [*] File changed (hash mismatch): config.json
 [+] New file to upload: changelog.md
+[#] Backfilling empty FileHash for unchanged file: docs/guide.html
 
 ============================================================
 [✓] SYNC PROCESS COMPLETED
@@ -661,6 +717,8 @@ Processing files...
    - New hashes saved:            255
    - Hashes updated:              129
    - Hash matches (skipped):      569
+   - Hashes backfilled:           45
+   - Empty hash found:            0
 
 [DATA] Transfer Summary:
    - Data uploaded:   93.7 MB
@@ -668,6 +726,48 @@ Processing files...
    - Sync efficiency: 65.4% (bandwidth saved by smart sync)
 ============================================================
 ```
+
+### FileHash Backfill (Automatic)
+
+Automatically populates empty FileHash values without re-uploading files.
+
+**Problem Solved:**
+- Files uploaded before FileHash column existed have empty hash values
+- These files fall back to less reliable size comparison
+- Traditional solution: Force re-upload entire repository (slow, wasteful)
+
+**How Backfill Works:**
+1. Detects files with empty FileHash during comparison
+2. Confirms file is unchanged via size match
+3. Calculates hash from local file content
+4. Updates FileHash field directly (no file upload)
+5. Future checks use hash-based comparison
+
+**Benefits:**
+- 📈 Gradual migration to 100% hash-based comparison
+- 💾 **99.8% bandwidth savings** vs force upload approach
+- ⚡ **90% time savings** (PATCH request vs full upload)
+- 🔄 Always-on feature (no configuration needed)
+
+**Statistics Tracked:**
+- `hash_backfilled` - Files with hash populated (no upload)
+- `hash_empty_found` - Files discovered with empty hash
+- `hash_backfill_failed` - Failed backfill attempts
+- `hash_column_unavailable` - Files checked when column doesn't exist
+
+**Example Output:**
+```
+[HASH] FileHash Column Statistics:
+   - New hashes saved:         1
+   - Hash matches (skipped):   152  ← Increased from 107
+   - Hashes backfilled:        45   ← NEW! Automatic backfill
+   - Empty hash found:         0    ← Drops to 0 after first run
+```
+
+**Performance Impact:**
+- One-time PATCH request per file with empty hash (~200ms each)
+- Example: 200 files with empty hash = 40 seconds vs 6.7 minutes for re-upload
+- **Time savings: 90%** | **Bandwidth savings: 99.8%**
 
 ### Markdown Conversion
 
@@ -680,7 +780,56 @@ Converts `.md` files to GitHub-flavored HTML with embedded styling:
 - ✅ Task lists with checkboxes
 - ✅ Blockquotes
 - ✅ Links and images
-- ✅ **Mermaid diagrams with automatic mermaid sanitization** (rendered as embedded SVG)
+- ✅ **Internal link rewriting** (relative markdown links → SharePoint URLs)
+- ✅ **Mermaid diagrams with automatic sanitization** (rendered as embedded SVG)
+
+<details>
+<summary><strong>🔗 Automatic Internal Link Rewriting</strong></summary>
+
+**New in v4.2.0**: Automatically converts relative markdown links to absolute SharePoint URLs.
+
+### How It Works
+
+When converting `.md` to `.html`, the action rewrites internal repository links to proper SharePoint URLs:
+
+**Before Conversion (in .md file):**
+```markdown
+See [Installation Guide](../setup/install.md) for details.
+Check [API Reference](api/reference.md#endpoints).
+View [Project README](../../README.md).
+```
+
+**After Conversion (in .html file):**
+```html
+See <a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/setup/install.html">Installation Guide</a> for details.
+Check <a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/api/reference.html#endpoints">API Reference</a>.
+View <a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/README.html">Project README</a>.
+```
+
+### What Gets Rewritten
+
+| Link Type | Rewritten? | Example |
+|-----------|------------|---------|
+| Relative markdown | ✅ Yes | `../README.md` → Full SharePoint URL |
+| Absolute markdown | ✅ Yes | `/docs/guide.md` → Full SharePoint URL |
+| Anchor links | ✅ Yes | `#section` → Preserved with full URL |
+| External links | ❌ No | `https://example.com` → Unchanged |
+| Image links | ❌ No | `![logo](logo.png)` → Unchanged |
+
+### Benefits
+
+- 📂 **Cross-folder navigation works** in SharePoint
+- 🔗 **No broken links** from relative paths
+- 📝 **Documentation stays interconnected**
+- ✅ **Automatic** - no manual link updates needed
+
+### Notes
+
+- Only applies to converted markdown (`.md` → `.html`)
+- Raw markdown uploads (when `convert_md_to_html: false`) preserve original links
+- SharePoint folder structure must match repository structure
+
+</details>
 
 <details>
 <summary><strong>🔧 Automatic Mermaid Sanitization</strong></summary>
@@ -734,27 +883,96 @@ All shapes are auto-sanitized for special characters. No manual fixes needed!
 <details>
 <summary><strong>💡 Smart Sync for Converted Markdown</strong></summary>
 
-Converted markdown files use **size-based comparison** instead of hash comparison to prevent unnecessary re-uploads.
+Converted markdown files use **source `.md` file hash** for comparison to prevent unnecessary re-uploads.
 
 **Why?**
-- Mermaid diagrams may generate SVGs with varying internal IDs between renders
-- Content and visual appearance remain identical, but hash changes
-- File size stays consistent for the same diagram
+- Mermaid CLI may generate SVGs with varying internal IDs between renders
+- Content and visual appearance remain identical, but generated HTML hash changes
+- Using source `.md` file hash ensures consistent comparison
 
 **How It Works:**
-1. **Before Upload**: Compares file **size** (not hash) between local HTML and SharePoint HTML
-2. **Smart Skip**: If sizes match, file is skipped (no unnecessary upload)
-3. **After Upload**: Calculates and saves hash to FileHash column for future reference
+1. **Calculate Source Hash**: Hash the original `.md` file before conversion
+2. **Convert to HTML**: Create styled HTML with Mermaid diagrams
+3. **Early Skip Check**: Query SharePoint to see if `.html` file exists with matching source hash
+4. **Smart Decision**:
+   - If source `.md` unchanged → Skip conversion entirely (95-98% time savings)
+   - If source `.md` changed → Convert and upload
+5. **Save Hash**: Store source `.md` hash in FileHash column for the `.html` file
 
 **Result:**
 - ✅ Markdown files with unchanged content won't re-upload
 - ✅ Mermaid diagram variations don't trigger false positives
-- ✅ FileHash column still populated for all files
-- ✅ Smart sync works perfectly for documentation repositories
+- ✅ FileHash column populated with deterministic source hash
+- ✅ Perfect smart sync for documentation repositories
+- ✅ Avoids expensive conversion (3-10s per file) when not needed
 
-**Note:** Regular files (non-markdown) still use hash-based comparison for maximum accuracy.
+**Performance Impact:**
+- First run: Convert all markdown files
+- Subsequent runs: Only convert changed files (typically 5-10%)
+- 100 unchanged .md files: ~10 seconds vs 5-16 minutes (sequential conversion)
+
+**Note:** Regular files (non-markdown) still use hash-based comparison of actual file content for maximum accuracy.
 
 </details>
+
+### Debug Mode
+
+Enable detailed logging for troubleshooting and diagnostics.
+
+**General Debug** (`debug: true`):
+- Shows file processing decisions
+- Displays path calculations and folder operations
+- Traces sync deletion comparisons
+- Includes thread identifiers for parallel operations
+- Logs hash comparison details
+
+**Metadata Debug** (`debug_metadata: true`):
+- Shows Graph API HTTP requests/responses
+- Displays SharePoint column inspection
+- Tracks FileHash value lifecycle
+- Logs rate limiting headers
+- Shows batch update details
+
+**Thread Identifiers** (when `debug: true`):
+- `[Main]` - Main orchestration thread
+- `[Upload-N]` - Upload worker threads (N = worker number)
+- `[Convert-N]` - Markdown conversion worker threads
+- Helps track which thread produced each log line
+
+**Configuration:**
+
+```yaml
+# General debug only (recommended for most troubleshooting)
+- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
+  with:
+    # ... other parameters
+    debug: true
+
+# Full debug mode (maximum verbosity)
+- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
+  with:
+    # ... other parameters
+    debug: true
+    debug_metadata: true  # Very verbose!
+```
+
+**Example Output with Debug:**
+```
+[Main] [?] Checking if file exists in SharePoint: docs/api/README.html
+[Main] [#] Source .md file hash: a1b2c3d4... (will be used for .html file)
+[Upload-1] [OK] File uploaded: assets/image.png
+[Convert-2] [MD] Converting markdown to HTML: docs/guide.md
+[Main] [=] File unchanged (hash match): docs/setup.html
+[Main] [#] Backfilling empty FileHash for unchanged file: legacy/old.html
+```
+
+**Use Cases:**
+- Troubleshooting unexpected uploads or skips
+- Debugging sync deletion identifying wrong files
+- Understanding folder structure preservation
+- Verifying exclusion patterns work correctly
+- Analyzing performance bottlenecks
+- Investigating Graph API permission issues
 
 ### Sync Deletion
 
@@ -823,17 +1041,16 @@ File Deleted: archive/notes.txt
 
 #### 🔍 Troubleshooting Sync Deletion
 
-If sync deletion is marking unexpected files for deletion, enable **DEBUG mode** to see detailed comparison:
+If sync deletion is marking unexpected files for deletion, enable **debug mode** to see detailed comparison:
 
 ```yaml
 - name: Sync with Debug Output
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     # ... your parameters
     sync_delete: true
     sync_delete_whatif: true
-  env:
-    DEBUG: "true"  # Enable detailed debug logging
+    debug: true  # Enable detailed debug logging
 ```
 
 **Debug output shows:**
@@ -927,7 +1144,7 @@ Get-PnPAzureADAppSitePermission
 No workflow changes needed! Works identically:
 
 ```yaml
-- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+- uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     site_name: "TeamSite"  # Must match granted site
     # ... other parameters (same as before)
@@ -997,6 +1214,16 @@ No workflow changes needed! Works identically:
 - ✅ Action automatically falls back to file size comparison
 - ✅ Grant `Sites.Manage.All` for hash-based comparison (optional)
 
+### 6. Throttling Issues (429 Errors)
+
+**Error:** `Rate limited (429)`
+
+**Solutions:**
+- ✅ Decrease `max_upload_workers` to 2-3
+- ✅ Increase retry delays
+- ✅ Default of 4 workers should be safe for most cases
+- ⚠️ Monitor for increased throttling after September 30, 2025 (Microsoft reducing limits)
+
 ### Debug Steps
 
 Add before upload step to inspect files:
@@ -1008,14 +1235,13 @@ Add before upload step to inspect files:
     ls -la docs/**/*.md
 ```
 
-Enable verbose logging:
+Enable debug logging:
 ```yaml
 - name: Upload with Debug
-  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
   with:
     # ... parameters
-  env:
-    ACTIONS_STEP_DEBUG: true
+    debug: true
 ```
 
 </details>
@@ -1046,6 +1272,11 @@ Enable verbose logging:
 **File Size Handling:**
 - Small files (<4MB): Direct upload (~10 files/second)
 - Large files (≥4MB): Chunked upload (~50 MB/second)
+
+**FileHash Backfill Performance:**
+- Backfilling 200 empty hashes: ~40 seconds
+- Force re-upload alternative: ~6.7 minutes
+- **Time savings: 90%** | **Bandwidth savings: 99.8%**
 
 </details>
 
@@ -1084,20 +1315,14 @@ docker run sharepoint-upload \
 
 - **🐛 Issues:** [GitHub Issues](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action/issues)
 - **💬 Discussions:** [GitHub Discussions](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action/discussions)
-- **📧 Email:** [support@aunalytics.com](mailto:support@aunalytics.com)
-
-## 📜 License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
 Built with these excellent open-source projects:
-- [Office365-REST-Python-Client](https://github.com/vgrem/Office365-REST-Python-Client) - SharePoint/Graph API
 - [Mistune](https://github.com/lepture/mistune) - Markdown parsing
 - [Mermaid-CLI](https://github.com/mermaid-js/mermaid-cli) - Diagram rendering
 - [xxHash](https://github.com/Cyan4973/xxHash) - Ultra-fast hashing
+- [Requests](https://github.com/psf/requests) - HTTP client
+- [MSAL](https://github.com/AzureAD/microsoft-authentication-library-for-python) - Microsoft Authentication Library
 
 ---
-
-**Made with ❤️ by [Aunalytics Managed Services](https://www.aunalytics.com)**

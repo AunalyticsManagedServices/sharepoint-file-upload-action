@@ -422,8 +422,16 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                                 if is_debug_enabled():
                                     print(f"[*] File changed (hash mismatch): {sanitized_name}")
                                 return True, True, None, local_hash
-                        elif debug_metadata:
-                            print(f"[DEBUG] FileHash not found in list item fields")
+                        else:
+                            # FileHash column exists but value is empty for this file
+                            if debug_metadata:
+                                print(f"[DEBUG] FileHash not found in list item fields")
+                            if upload_stats_dict:
+                                upload_stats_dict['hash_empty_found'] = upload_stats_dict.get('hash_empty_found', 0) + 1
+                    else:
+                        # FileHash column doesn't exist at all
+                        if upload_stats_dict:
+                            upload_stats_dict['hash_column_unavailable'] = upload_stats_dict.get('hash_column_unavailable', 0) + 1
                 elif debug_metadata:
                     print(f"[DEBUG] Could not retrieve list item data for {sanitized_name}")
 
@@ -464,6 +472,48 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                 if upload_stats_dict:
                     upload_stats_dict['skipped_files'] += 1
                     upload_stats_dict['bytes_skipped'] += local_size
+
+                # Backfill empty FileHash values
+                # If FileHash column exists but value is empty, and we have confirmed
+                # file is unchanged via size comparison, update the hash without re-uploading
+                if (filehash_column_available and
+                    not hash_comparison_available and  # Hash was empty
+                    local_hash and  # We have a calculated hash
+                    site_url and list_name and  # Required for update
+                    item_with_list and 'listItem' in item_with_list and 'id' in item_with_list['listItem']):
+
+                    # Attempt to backfill the FileHash
+                    item_id = item_with_list['listItem']['id']
+
+                    if is_debug_enabled():
+                        display_name = display_path if display_path else sanitized_name
+                        print(f"[#] Backfilling empty FileHash for unchanged file: {display_name}")
+
+                    try:
+                        from .graph_api import update_sharepoint_list_item_field
+
+                        success = update_sharepoint_list_item_field(
+                            site_url, list_name, item_id, 'FileHash', local_hash,
+                            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                        )
+
+                        if success:
+                            if is_debug_enabled():
+                                print(f"[✓] FileHash backfilled: {local_hash[:8]}...")
+                            if upload_stats_dict:
+                                upload_stats_dict['hash_backfilled'] = upload_stats_dict.get('hash_backfilled', 0) + 1
+                        else:
+                            if is_debug_enabled():
+                                print(f"[!] Failed to backfill FileHash")
+                            if upload_stats_dict:
+                                upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
+
+                    except Exception as backfill_error:
+                        if is_debug_enabled():
+                            print(f"[!] Error backfilling FileHash: {str(backfill_error)[:200]}")
+                        if upload_stats_dict:
+                            upload_stats_dict['hash_backfill_failed'] = upload_stats_dict.get('hash_backfill_failed', 0) + 1
+
             else:
                 if is_debug_enabled():
                     display_name = display_path if display_path else sanitized_name
