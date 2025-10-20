@@ -25,7 +25,7 @@ Seamlessly synchronize files from your GitHub repository to SharePoint document 
 | 📁 **Automated Sync** | Keep SharePoint documentation current with your GitHub repository |
 | ⚡ **Smart Uploads** | Only uploads new or modified files (typically skips 60-90% of files) |
 | 📝 **Markdown Support** | Converts `.md` files to styled HTML with Mermaid diagram rendering |
-| 🔄 **Bidirectional Sync** | Optional deletion of SharePoint files removed from repository |
+| 🔄 **Mirror Sync** | Optional deletion of SharePoint files removed from repository |
 | 📊 **Detailed Reports** | Clear statistics on uploads, skips, and failures |
 | 🔒 **Enterprise Ready** | Supports GovCloud, Sites.Selected permissions, and large files |
 
@@ -181,7 +181,6 @@ Examples:
 | `sync_delete` | `false` | Delete SharePoint files not in repository |
 | `sync_delete_whatif` | `true` | Preview deletions without deleting |
 | `max_upload_workers` | `4` | Concurrent upload workers (1-10) |
-| `max_hash_workers` | `CPU count` | Hash calculation workers (auto-detect) |
 | `login_endpoint` | `"login.microsoftonline.com"` | Azure AD endpoint |
 | `graph_endpoint` | `"graph.microsoft.com"` | Microsoft Graph endpoint |
 
@@ -254,7 +253,7 @@ exclude_patterns: ".env,.env.local,secrets.json,*.key"
 
 See [Exclusion Patterns](#exclusion-patterns) for detailed guide.
 
-#### `sync_delete` - Bidirectional sync
+#### `sync_delete` - Mirror sync
 
 - **Default**: `false` (safer)
 - **Use `true`** to delete SharePoint files removed from repository
@@ -301,20 +300,6 @@ sync_delete_whatif: false  # Actually deletes
 max_upload_workers: 4   # Default (recommended)
 max_upload_workers: 8   # High-performance networks
 max_upload_workers: 2   # Conservative (low throttling risk)
-```
-
-#### `max_hash_workers` - Hash calculation workers
-
-- **Default**: Auto-detected (CPU count)
-- **Range**: 1-unlimited
-- **When to adjust**:
-  - Usually no need to configure (auto-detection is optimal)
-  - Decrease if running in resource-constrained environment
-  - Leave empty for auto-detection
-
-```yaml
-max_hash_workers: ""    # Auto-detect (recommended)
-max_hash_workers: 2     # Limit for low-resource containers
 ```
 
 #### `login_endpoint` / `graph_endpoint` - Cloud environments
@@ -520,7 +505,7 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
     graph_endpoint: "graph.microsoft.us"
 ```
 
-### Example 5: Bidirectional Sync with Cleanup
+### Example 5: Mirror Sync with Cleanup
 
 ```yaml
 - name: Checkout Repository
@@ -602,7 +587,6 @@ Batch Metadata Updates:    Enabled (20 items/batch)
 - uses: AunalyticsManagedServices/sharepoint-file-upload-action@v3
   with:
     max_upload_workers: 8      # Increase concurrent uploads
-    max_hash_workers: 16       # Override auto-detection
     # ... other parameters
 
 # Conservative settings (minimize throttling risk)
@@ -774,7 +758,7 @@ Converted markdown files use **size-based comparison** instead of hash compariso
 
 ### Sync Deletion
 
-**Bidirectional sync** - automatically removes SharePoint files that no longer exist in your repository.
+**Mirror sync** - automatically removes SharePoint files that no longer exist in your repository.
 
 **Use Cases:**
 - 🔄 Renamed files (old name removed)

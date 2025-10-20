@@ -33,9 +33,8 @@ class Config:
         15. sync_delete (optional) - Delete SharePoint files not in sync set (default: False)
         16. sync_delete_whatif (optional) - Preview deletions without actually deleting (default: True)
         17. max_upload_workers (optional) - Max concurrent uploads (default: 4, respects Graph API limits)
-        18. max_hash_workers (optional) - Max hash calculation workers (default: CPU count)
-        19. debug (optional) - Enable general debug output (default: False)
-        20. debug_metadata (optional) - Enable metadata-specific debug output (default: False)
+        18. debug (optional) - Enable general debug output (default: False)
+        19. debug_metadata (optional) - Enable metadata-specific debug output (default: False)
         """
         # Required arguments
         self.site_name = sys.argv[1]
@@ -63,25 +62,21 @@ class Config:
 
         # Max upload workers: Default 4 (Graph API concurrent request limit)
         # Can be overridden but should not exceed 10 to respect API limits
+        # WARNING: Starting September 30, 2025, Microsoft will reduce per-app/per-user
+        # throttling limits to HALF the total per-tenant limit. Monitor for increased
+        # 429 responses after this date. Default of 4 workers should remain safe.
         if len(sys.argv) > 17 and sys.argv[17]:
             self.max_upload_workers = min(int(sys.argv[17]), 10)
         else:
             self.max_upload_workers = 4  # Safe default for Graph API
-
-        # Max hash workers: Default to CPU count for optimal parallel hashing
-        # Hash calculation is CPU-bound, so use all available cores
-        if len(sys.argv) > 18 and sys.argv[18]:
-            self.max_hash_workers = int(sys.argv[18])
-        else:
-            self.max_hash_workers = cpu_count  # Auto-detect optimal value
 
         # Max markdown workers: Default 4 (mermaid-cli subprocess limit)
         # Balance between parallelism and Chromium memory usage
         self.max_markdown_workers = min(4, cpu_count)
 
         # Debug flags
-        self.debug = (sys.argv[19] if len(sys.argv) > 19 else "false").lower() == "true"
-        self.debug_metadata = (sys.argv[20] if len(sys.argv) > 20 else "false").lower() == "true"
+        self.debug = (sys.argv[18] if len(sys.argv) > 18 else "false").lower() == "true"
+        self.debug_metadata = (sys.argv[19] if len(sys.argv) > 19 else "false").lower() == "true"
 
         # Derived values
         self.tenant_url = f'https://{self.sharepoint_host_name}/sites/{self.site_name}'

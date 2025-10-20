@@ -18,14 +18,54 @@ _original_print = builtins.print
 def thread_safe_print(*args, **kwargs):
     """
     Thread-safe replacement for print() that ensures sequential output.
-    Maintains exact same output format as standard print().
+    When DEBUG=true, includes thread identifier to track which thread produced each log line.
+
+    Thread identifiers (DEBUG mode only):
+        [Main] - Main thread (orchestration, statistics, summaries)
+        [Upload-N] - Upload worker threads
+        [Convert-N] - Markdown conversion worker threads
 
     Args:
         *args: Same as print()
         **kwargs: Same as print()
     """
+    import os
+
+    # Check if debug mode is enabled
+    show_thread_id = os.environ.get('DEBUG', '').lower() == 'true'
+
     with _console_lock:
-        _original_print(*args, **kwargs)
+        if show_thread_id and args:
+            # Get thread information
+            thread_name = threading.current_thread().name
+
+            # Determine thread prefix based on thread name
+            if thread_name == "MainThread":
+                prefix = "[Main]"
+            elif thread_name.startswith("Upload-"):
+                # Upload worker: "Upload-1" -> "[Upload-1]"
+                prefix = f"[{thread_name}]"
+            elif thread_name.startswith("Convert-"):
+                # Conversion worker: "Convert-1" -> "[Convert-1]"
+                prefix = f"[{thread_name}]"
+            elif "ThreadPoolExecutor" in thread_name:
+                # Unnamed worker thread - extract number
+                parts = thread_name.split('_')
+                if len(parts) > 1:
+                    worker_num = parts[-1]
+                else:
+                    parts = thread_name.split('-')
+                    worker_num = parts[-1] if parts[-1].isdigit() else "?"
+                prefix = f"[Worker-{worker_num}]"
+            else:
+                # Unknown thread type - use name as-is (truncated)
+                prefix = f"[{thread_name[:10]}]"
+
+            # Prepend thread identifier to output
+            _original_print(prefix, *args, **kwargs)
+        else:
+            # Normal mode (DEBUG=false) or empty print call
+            _original_print(*args, **kwargs)
 
 
 def enable_thread_safe_print():

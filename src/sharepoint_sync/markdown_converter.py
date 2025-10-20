@@ -224,22 +224,127 @@ def convert_mermaid_to_svg(mermaid_code, filename=None):
         return None
 
 
-def convert_markdown_to_html(md_content, filename):
+def rewrite_markdown_links(md_content, sharepoint_base_url=None, current_file_rel_path=None):
+    """
+    Rewrite internal markdown links to proper SharePoint URLs.
+
+    Converts relative markdown links (e.g., ../README.md, folder/file.md) to
+    absolute SharePoint URLs with proper path structure.
+
+    Args:
+        md_content (str): Markdown content with links
+        sharepoint_base_url (str): Base SharePoint URL (e.g.,
+            'https://aunalytics.sharepoint.com/sites/SiteName/Shared%20Documents/Folder/Path')
+        current_file_rel_path (str): Current file's relative path from upload root
+            (e.g., 'Adobe/AcrobatDC/Update/README.md')
+
+    Returns:
+        str: Markdown content with rewritten links
+    """
+    if not sharepoint_base_url or not current_file_rel_path:
+        # Can't rewrite without context - return original
+        return md_content
+
+    import posixpath
+    from urllib.parse import quote
+
+    # Get current file's directory
+    current_dir = posixpath.dirname(current_file_rel_path)
+
+    def rewrite_link(match):
+        """Rewrite a single markdown link"""
+        link_text = match.group(1)
+        link_url = match.group(2)
+
+        # Skip external links (http://, https://, mailto:, etc.)
+        if '://' in link_url or link_url.startswith('mailto:') or link_url.startswith('#'):
+            return match.group(0)  # Return unchanged
+
+        # Determine if link is to local repository content
+        # Process: .md files, folders (ending with /), or other file extensions
+        is_markdown = link_url.endswith('.md') or '.md#' in link_url
+        is_folder = link_url.endswith('/')
+
+        # Skip if not markdown and not folder (leave other file types as-is)
+        # This preserves links to images, PDFs, etc.
+        if not is_markdown and not is_folder:
+            # Check if it has a file extension - if not, might be a folder reference
+            if '.' not in posixpath.basename(link_url):
+                # No extension, might be folder - treat as folder
+                is_folder = True
+            else:
+                # Has extension but not .md - skip
+                return match.group(0)
+
+        # Split anchor if present (e.g., README.md#section or folder/#section)
+        if '#' in link_url:
+            link_path, anchor = link_url.split('#', 1)
+            anchor = '#' + anchor
+        else:
+            link_path = link_url
+            anchor = ''
+
+        # Resolve relative path to absolute path from upload root
+        if link_path.startswith('/'):
+            # Absolute path from repository root
+            resolved_path = link_path.lstrip('/')
+        else:
+            # Relative path - resolve from current directory
+            resolved_path = posixpath.normpath(posixpath.join(current_dir, link_path))
+
+        # Convert .md extension to .html
+        if resolved_path.endswith('.md'):
+            resolved_path = resolved_path[:-3] + '.html'
+
+        # For folders, ensure trailing slash is removed for URL construction
+        if is_folder and resolved_path.endswith('/'):
+            resolved_path = resolved_path.rstrip('/')
+
+        # URL encode the path components but preserve slashes
+        path_parts = resolved_path.split('/')
+        encoded_parts = [quote(part) for part in path_parts]
+        encoded_path = '/'.join(encoded_parts)
+
+        # Construct full SharePoint URL
+        # For folders, SharePoint uses Forms/AllItems.aspx view
+        if is_folder:
+            # Folder link format
+            full_url = f"{sharepoint_base_url}/{encoded_path}"
+        else:
+            # File link format
+            full_url = f"{sharepoint_base_url}/{encoded_path}{anchor}"
+
+        # Return rewritten markdown link
+        return f'[{link_text}]({full_url})'
+
+    # Pattern to match markdown links: [text](url)
+    import re
+    md_content = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', rewrite_link, md_content)
+
+    return md_content
+
+
+def convert_markdown_to_html(md_content, filename, sharepoint_base_url=None, current_file_rel_path=None):
     """
     Convert Markdown content to HTML with Mermaid diagrams rendered as SVG.
 
     This function:
-    1. Parses markdown using Mistune
-    2. Finds and converts Mermaid code blocks to inline SVG
-    3. Applies GitHub-like styling for SharePoint viewing
+    1. Rewrites internal markdown links to SharePoint URLs
+    2. Parses markdown using Mistune
+    3. Finds and converts Mermaid code blocks to inline SVG
+    4. Applies GitHub-like styling for SharePoint viewing
 
     Args:
         md_content (str): Markdown content to convert
         filename (str): Original filename for the HTML title
+        sharepoint_base_url (str, optional): Base SharePoint URL for link rewriting
+        current_file_rel_path (str, optional): Current file's relative path
 
     Returns:
         str: Complete HTML document with embedded styles and SVGs
     """
+    # Rewrite internal markdown links before conversion
+    md_content = rewrite_markdown_links(md_content, sharepoint_base_url, current_file_rel_path)
     # First, extract and convert all mermaid blocks to placeholder SVGs
     mermaid_pattern = r'```mermaid\n(.*?)\n```'
     mermaid_blocks = []

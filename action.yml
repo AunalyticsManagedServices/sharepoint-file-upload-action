@@ -52,7 +52,7 @@ inputs:
     required: false
     default: ""
   sync_delete:
-    description: 'Delete SharePoint files that no longer exist in the repository (bidirectional sync)'
+    description: 'Delete SharePoint files that no longer exist in the repository (mirror sync)'
     required: false
     default: "false"
   sync_delete_whatif:
@@ -60,13 +60,9 @@ inputs:
     required: false
     default: "true"
   max_upload_workers:
-    description: 'Maximum concurrent upload workers (1-10, default: 4 for Graph API limits)'
+    description: 'Maximum concurrent upload workers (1-10, default: 4 for Graph API limits). WARNING: Starting Sept 30, 2025, Microsoft will reduce per-app throttling to HALF the tenant limit.'
     required: false
     default: "4"
-  max_hash_workers:
-    description: 'Maximum hash calculation workers (default: CPU count for optimal performance)'
-    required: false
-    default: ""
   debug:
     description: 'Enable general debug output (execution flow, decisions, file processing)'
     required: false
@@ -101,6 +97,5 @@ runs:
     - ${{ inputs.sync_delete }}
     - ${{ inputs.sync_delete_whatif }}
     - ${{ inputs.max_upload_workers }}
-    - ${{ inputs.max_hash_workers }}
     - ${{ inputs.debug }}
     - ${{ inputs.debug_metadata }}

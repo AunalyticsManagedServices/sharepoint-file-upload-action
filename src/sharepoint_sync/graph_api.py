@@ -678,8 +678,10 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
         items_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items"
 
         # First attempt: Use OData filter
+        # IMPORTANT: Custom columns like FileHash must be explicitly requested using $select
+        # Standard fields are included by default, but custom columns require explicit selection
         items_params = {
-            '$expand': 'fields',
+            '$expand': 'fields($select=FileHash,FileLeafRef,FileSizeDisplay,File_x0020_Size)',
             '$filter': f"fields/FileLeafRef eq '{filename}'"
         }
 
@@ -697,7 +699,8 @@ def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_i
 
             # Fallback: Get all items and filter in Python
             print(f"[DEBUG] Trying fallback: getting all items and filtering in Python...")
-            items_params = {'$expand': 'fields'}
+            # Explicitly request custom FileHash column in fallback as well
+            items_params = {'$expand': 'fields($select=FileHash,FileLeafRef,FileSizeDisplay,File_x0020_Size)'}
             items_response = make_graph_request_with_retry(items_endpoint, headers=headers, params=items_params)
 
             if items_response.status_code != 200:
@@ -927,10 +930,11 @@ def test_column_accessibility(site_id, list_id, token, graph_endpoint, internal_
         debug_metadata = is_debug_metadata_enabled()
 
         # Try to get list items with specific field selection
+        # Must explicitly request custom columns in $expand for them to appear
         url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items"
         params = {
             '$top': 1,
-            '$expand': 'fields',
+            '$expand': f'fields($select={internal_name})',
             '$select': f'id,fields'
         }
         headers = {
@@ -1915,7 +1919,7 @@ def create_folder_graph(site_id, drive_id, parent_item_id, folder_name,
 
 
 def list_folder_children_graph(site_id, drive_id, item_id, tenant_id, client_id,
-                               client_secret, login_endpoint, graph_endpoint):
+                               client_secret, login_endpoint, graph_endpoint, folder_path=None):
     """
     List all children (files and folders) in a folder using Graph API.
 
@@ -1928,6 +1932,7 @@ def list_folder_children_graph(site_id, drive_id, item_id, tenant_id, client_id,
         client_secret (str): Azure AD application client secret
         login_endpoint (str): Azure AD login endpoint
         graph_endpoint (str): Microsoft Graph API endpoint
+        folder_path (str, optional): Human-readable folder path for debug output
 
     Returns:
         list: List of driveItem dictionaries, each with:
@@ -1963,7 +1968,10 @@ def list_folder_children_graph(site_id, drive_id, item_id, tenant_id, client_id,
             children_data = children_response.json()
             children = children_data.get('value', [])
             if debug_enabled:
-                print(f"[DEBUG] Found {len(children)} children in folder {item_id}")
+                if folder_path:
+                    print(f"[DEBUG] Found {len(children)} children in folder '{folder_path}' ({item_id})")
+                else:
+                    print(f"[DEBUG] Found {len(children)} children in folder ({item_id})")
             return children
         else:
             raise Exception(f"List children failed: {children_response.status_code} - {children_response.text}")

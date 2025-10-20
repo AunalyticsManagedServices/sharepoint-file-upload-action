@@ -262,7 +262,7 @@ def should_exclude_path(path, exclude_patterns):
 
 def check_file_needs_update(local_path, file_name, site_url, list_name, filehash_column_available,
                             tenant_id=None, client_id=None, client_secret=None, login_endpoint=None,
-                            graph_endpoint=None, upload_stats_dict=None, force_size_comparison=False):
+                            graph_endpoint=None, upload_stats_dict=None, pre_calculated_hash=None, display_path=None):
     """
     Check if a file in SharePoint needs to be updated by comparing hash or size.
 
@@ -270,7 +270,6 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
     Files are compared using:
     1. FileHash (xxHash128) if column exists - most reliable
     2. Size comparison as fallback - works without custom columns
-    3. Size comparison only if force_size_comparison=True (for converted markdown)
 
     Args:
         local_path (str): Path to the local file
@@ -284,15 +283,17 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
         login_endpoint (str, optional): Azure AD login endpoint for REST API calls
         graph_endpoint (str, optional): Microsoft Graph API endpoint for REST API calls
         upload_stats_dict (dict, optional): Upload statistics dictionary to update
-        force_size_comparison (bool, optional): If True, skip hash comparison and use size only
-                                                 (used for converted markdown files where hash varies)
+        pre_calculated_hash (str, optional): Pre-calculated hash to use instead of calculating from file
+                                             (useful for converted markdown where source .md hash is used)
+        display_path (str, optional): Relative path for display in debug output (e.g., 'docs/api/README.html')
+                                     If not provided, falls back to sanitized_name
 
     Returns:
         tuple: (needs_update: bool, exists: bool, remote_file: None, local_hash: str or None)
             - needs_update: True if file should be uploaded
             - exists: True if file exists in SharePoint
             - remote_file: Always None (no longer using Office365 DriveItem objects)
-            - local_hash: The calculated hash of the local file (if computed)
+            - local_hash: The calculated or provided hash of the file
 
     Example:
         needs_update, exists, remote, hash_val = check_file_needs_update(
@@ -306,16 +307,17 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
     # Sanitize the file name to match what would be stored in SharePoint
     sanitized_name = sanitize_sharepoint_name(file_name, is_folder=False)
 
-    # Calculate local file hash upfront for efficiency
-    # Skip hash calculation if force_size_comparison is True (converted markdown)
+    # Use pre-calculated hash if provided, otherwise calculate from file
     local_hash = None
-    if not force_size_comparison:
+    if pre_calculated_hash:
+        local_hash = pre_calculated_hash
+        if is_debug_enabled():
+            print(f"[#] Using pre-calculated hash: {local_hash[:8]}... for {sanitized_name}")
+    else:
         local_hash = calculate_file_hash(local_path)
         if local_hash:
             if is_debug_enabled():
                 print(f"[#] Local hash: {local_hash[:8]}... for {sanitized_name}")
-    elif is_debug_enabled():
-        print(f"[#] Using size-only comparison for converted file: {local_path}")
 
     # Get local file information
     local_size = os.path.getsize(local_path)
@@ -325,7 +327,8 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
 
     # Debug: Show what we're checking
     if is_debug_enabled():
-        print(f"[?] Checking if file exists in SharePoint: {local_path}")
+        display_name = display_path if display_path else sanitized_name
+        print(f"[?] Checking if file exists in SharePoint: {display_name}")
 
     # Use Graph REST API to check file existence and get metadata
     # This replaces the Office365 library usage
@@ -363,8 +366,7 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                             remote_size = None
 
                     # Try to get FileHash if column is available
-                    # Skip hash comparison if force_size_comparison is True (converted markdown)
-                    if filehash_column_available and not force_size_comparison:
+                    if filehash_column_available:
                         remote_hash = fields.get('FileHash')
 
                         if remote_hash:
@@ -390,8 +392,6 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                                 return True, True, None, local_hash
                         elif debug_metadata:
                             print(f"[DEBUG] FileHash not found in list item fields")
-                    elif force_size_comparison and debug_metadata:
-                        print(f"[DEBUG] Skipping hash comparison for converted markdown file")
                 elif debug_metadata:
                     print(f"[DEBUG] Could not retrieve list item data for {sanitized_name}")
 
@@ -434,7 +434,8 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                     upload_stats_dict['bytes_skipped'] += local_size
             else:
                 if is_debug_enabled():
-                    print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {local_path}")
+                    display_name = display_path if display_path else sanitized_name
+                    print(f"[*] File size changed (local: {local_size:,} vs remote: {remote_size:,}): {display_name}")
 
             return needs_update, True, None, local_hash
 
@@ -455,66 +456,6 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
             print(f"[DEBUG] Full error: {error_str[:500]}")  # First 500 chars
             print(f"[+] Assuming new file: {sanitized_name}")
         return True, False, None, local_hash
-
-
-def calculate_hashes_parallel(file_paths, max_workers=None):
-    """
-    Calculate xxHash128 for multiple files concurrently.
-
-    Uses ThreadPoolExecutor to hash multiple files in parallel, utilizing
-    multiple CPU cores for improved performance on large file sets.
-
-    Args:
-        file_paths (list): List of file paths to hash
-        max_workers (int): Number of worker threads (default: CPU count or len(files), whichever is smaller)
-
-    Returns:
-        dict: Mapping of {file_path: hash_value}
-              hash_value is None if calculation failed
-
-    Example:
-        >>> files = ['file1.txt', 'file2.pdf', 'file3.md']
-        >>> hash_map = calculate_hashes_parallel(files)
-        >>> print(hash_map['file1.txt'])
-        '8a3f2b1c4d5e6f7a...'
-
-    Note:
-        - 2-3x faster than sequential hashing for many files
-        - Particularly effective for large file sets (50+ files)
-        - Falls back gracefully on errors (returns None for failed files)
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    if not file_paths:
-        return {}
-
-    # Determine optimal worker count
-    if max_workers is None:
-        import os as os_module
-        cpu_count = os_module.cpu_count() or 4
-        max_workers = min(cpu_count, len(file_paths))
-
-    results = {}
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all hash calculations
-        future_to_path = {
-            executor.submit(calculate_file_hash, path): path
-            for path in file_paths
-        }
-
-        # Collect results as they complete
-        for future in as_completed(future_to_path):
-            path = future_to_path[future]
-            try:
-                hash_value = future.result()
-                results[path] = hash_value
-            except Exception as e:
-                if is_debug_enabled():
-                    print(f"[!] Hash calculation failed for {path}: {e}")
-                results[path] = None
-
-    return results
 
 
 def check_files_need_update_parallel(file_list, site_url, list_name,

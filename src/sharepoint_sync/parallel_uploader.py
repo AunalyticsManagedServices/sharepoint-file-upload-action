@@ -17,7 +17,7 @@ from .thread_utils import (
     enable_thread_safe_print
 )
 from .uploader import upload_file_with_structure, upload_file
-from .markdown_converter import convert_markdown_to_html
+from .markdown_converter import convert_markdown_to_html, rewrite_markdown_links
 from .file_handler import sanitize_path_components
 from .utils import is_debug_enabled
 from .monitoring import rate_monitor
@@ -135,6 +135,67 @@ class ParallelUploader:
 
         return failed_count
 
+    def _preprocess_markdown_file(self, file_path, base_path, config):
+        """
+        Preprocess a raw markdown file to rewrite internal links to SharePoint URLs.
+
+        Creates a temporary markdown file with rewritten links for upload.
+        This is used for .md files that are NOT being converted to HTML.
+
+        Args:
+            file_path (str): Path to the original markdown file
+            base_path (str): Base path for relative path calculation
+            config: Configuration object with SharePoint settings
+
+        Returns:
+            str: Path to temporary preprocessed markdown file, or original path if preprocessing fails
+        """
+        try:
+            # Read original markdown content
+            with open(file_path, 'r', encoding='utf-8') as f:
+                md_content = f.read()
+
+            # Calculate relative path for link rewriting
+            if base_path:
+                rel_path_str = os.path.relpath(file_path, base_path)
+            else:
+                rel_path_str = file_path
+
+            # Normalize path separators
+            rel_path_str = rel_path_str.replace('\\', '/')
+
+            # Construct SharePoint base URL
+            sharepoint_base_url = f"https://{config.sharepoint_host_name}/sites/{config.site_name}/Shared%20Documents/{config.upload_path}"
+
+            # Rewrite internal links
+            rewritten_content = rewrite_markdown_links(md_content, sharepoint_base_url, rel_path_str)
+
+            # Check if any changes were made
+            if rewritten_content == md_content:
+                # No links were rewritten, use original file
+                if is_debug_enabled():
+                    print(f"[MD] No links to rewrite in: {file_path}")
+                return file_path
+
+            # Create temporary file with rewritten content
+            temp_fd, temp_path = tempfile.mkstemp(suffix='.md', prefix='rewritten_md_')
+            try:
+                with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                    f.write(rewritten_content)
+            except Exception as write_error:
+                os.close(temp_fd)
+                raise write_error
+
+            if is_debug_enabled():
+                print(f"[MD] Preprocessed markdown with rewritten links: {file_path}")
+
+            return temp_path
+
+        except Exception as e:
+            print(f"[!] Failed to preprocess markdown file {file_path}: {e}")
+            # Fall back to original file
+            return file_path
+
     def _upload_files_parallel(self, file_list, site_id, drive_id, root_item_id, base_path, config,
                                filehash_available, library_name):
         """
@@ -144,16 +205,34 @@ class ParallelUploader:
             int: Number of failed uploads
         """
         failed_count = 0
+        temp_files_to_cleanup = []  # Track temp files for cleanup
 
-        def upload_worker(filepath):
+        def upload_worker(worker_id, filepath):
             """Worker function for parallel upload"""
+            import threading
+
+            # Name this thread for debug logging
+            threading.current_thread().name = f"Upload-{worker_id}"
+
             # Enable thread-safe print for this thread
             enable_thread_safe_print()
 
+            file_to_upload = filepath
+            is_temp = False
+
             try:
+                # Preprocess raw markdown files to rewrite links
+                if filepath.lower().endswith('.md'):
+                    preprocessed_path = self._preprocess_markdown_file(filepath, base_path, config)
+                    if preprocessed_path != filepath:
+                        # A temp file was created
+                        file_to_upload = preprocessed_path
+                        is_temp = True
+                        temp_files_to_cleanup.append(preprocessed_path)
+
                 # Call existing upload function - maintains all output/statistics
                 upload_file_with_structure(
-                    site_id, drive_id, root_item_id, filepath, base_path,
+                    site_id, drive_id, root_item_id, file_to_upload, base_path,
                     config.tenant_url, library_name,
                     4*1024*1024,  # 4MB chunk size
                     config.force_upload,
@@ -171,13 +250,20 @@ class ParallelUploader:
                 print(f"[!] Upload failed for {filepath}: {str(upload_err)[:200]}")
                 self.stats_wrapper.increment('failed_files')
                 return False
+            finally:
+                # Clean up temp file if one was created
+                if is_temp and os.path.exists(file_to_upload):
+                    try:
+                        os.remove(file_to_upload)
+                    except Exception:
+                        pass  # Ignore cleanup errors
 
         # Execute uploads in parallel
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all upload tasks
+            # Submit all upload tasks with worker IDs
             future_to_file = {
-                executor.submit(upload_worker, f): f
-                for f in file_list
+                executor.submit(upload_worker, idx % self.max_workers + 1, f): f
+                for idx, f in enumerate(file_list)
             }
 
             # Process completed uploads
@@ -209,8 +295,13 @@ class ParallelUploader:
         """
         failed_count = 0
 
-        def process_md_worker(md_filepath):
+        def process_md_worker(worker_id, md_filepath):
             """Worker for markdown processing"""
+            import threading
+
+            # Name this thread for debug logging
+            threading.current_thread().name = f"Convert-{worker_id}"
+
             enable_thread_safe_print()
 
             try:
@@ -229,8 +320,8 @@ class ParallelUploader:
         # Process markdown files in parallel
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_file = {
-                executor.submit(process_md_worker, f): f
-                for f in md_files
+                executor.submit(process_md_worker, idx % self.max_workers + 1, f): f
+                for idx, f in enumerate(md_files)
             }
 
             for future in as_completed(future_to_file):
@@ -258,12 +349,37 @@ class ParallelUploader:
             print(f"[MD] Converting markdown file: {file_path}")
 
         try:
+            # Calculate hash of source .md file BEFORE conversion
+            # This hash will be used for the converted .html file in SharePoint
+            from .file_handler import calculate_file_hash
+            md_file_hash = calculate_file_hash(file_path)
+            if md_file_hash and is_debug_enabled():
+                print(f"[#] Source .md file hash: {md_file_hash[:8]}... (will be used for .html file)")
+
             # Read markdown content
             with open(file_path, 'r', encoding='utf-8') as md_file_handle:
                 md_content = md_file_handle.read()
 
-            # Convert to HTML
-            html_content = convert_markdown_to_html(md_content, file_path)
+            # Calculate relative path for SharePoint link rewriting
+            if base_path:
+                rel_path_str = os.path.relpath(file_path, base_path)
+            else:
+                rel_path_str = file_path
+
+            # Normalize path separators to forward slashes
+            rel_path_str = rel_path_str.replace('\\', '/')
+
+            # Construct SharePoint base URL for link rewriting
+            # Format: https://host/sites/sitename/Shared Documents/upload_path
+            sharepoint_base_url = f"https://{config.sharepoint_host_name}/sites/{config.site_name}/Shared%20Documents/{config.upload_path}"
+
+            # Convert to HTML with link rewriting
+            html_content = convert_markdown_to_html(
+                md_content,
+                file_path,
+                sharepoint_base_url=sharepoint_base_url,
+                current_file_rel_path=rel_path_str
+            )
 
             # Create temp HTML file
             temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix='converted_md_')
@@ -304,8 +420,8 @@ class ParallelUploader:
 
             desired_html_filename = os.path.basename(original_html_path)
 
-            # Upload HTML file
-            # Use size-only comparison for converted markdown (Mermaid IDs cause hash variation)
+            # Upload HTML file with source .md file hash
+            # This allows hash-based comparison instead of size-only (solves Mermaid SVG ID variation issue)
             for i in range(config.max_retry):
                 try:
                     upload_file(
@@ -315,7 +431,8 @@ class ParallelUploader:
                         config.login_endpoint, config.graph_endpoint,
                         self.stats_wrapper, desired_name=desired_html_filename,
                         metadata_queue=self.metadata_queue,  # Pass queue for batch updates
-                        force_size_comparison=True  # Use size-only for converted markdown
+                        pre_calculated_hash=md_file_hash,  # Use source .md file hash for comparison
+                        display_path=sanitized_rel_path  # Show full relative path in debug output
                     )
                     break
                 except Exception as e:

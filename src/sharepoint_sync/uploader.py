@@ -111,7 +111,8 @@ def ensure_folder_exists(site_id, drive_id, parent_item_id, folder_path,
             # Get all items in current folder using Graph API
             children = list_folder_children_graph(
                 site_id, drive_id, current_item_id,
-                tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
+                folder_path=current_path
             )
 
             if children is not None:
@@ -173,7 +174,8 @@ def ensure_folder_exists(site_id, drive_id, parent_item_id, folder_path,
                         # Try to get the existing folder
                         children = list_folder_children_graph(
                             site_id, drive_id, current_item_id,
-                            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
+                            folder_path=current_path
                         )
                         if children:
                             for child in children:
@@ -401,7 +403,7 @@ def check_and_delete_existing_file(drive, file_name):
 def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force_upload, site_url, list_name,
                 filehash_column_available, tenant_id, client_id, client_secret,
                 login_endpoint, graph_endpoint, upload_stats_dict, desired_name=None,
-                metadata_queue=None, force_size_comparison=False):
+                metadata_queue=None, pre_calculated_hash=None, display_path=None):
     """
     Upload a file to SharePoint using Graph API, intelligently skipping unchanged files.
 
@@ -423,7 +425,8 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         upload_stats_dict (dict): Dictionary to track upload statistics
         desired_name (str): Optional desired filename in SharePoint (for temp file uploads)
         metadata_queue: Optional BatchQueue for batching metadata updates (parallel mode)
-        force_size_comparison (bool): If True, use size comparison only (for converted markdown)
+        pre_calculated_hash (str): Optional pre-calculated hash to use (for converted markdown using source .md hash)
+        display_path (str): Optional relative path for display in debug output (e.g., 'docs/api/README.html')
     """
     # Use desired_name if provided (for HTML conversions), otherwise use actual filename
     file_name = desired_name if desired_name else os.path.basename(local_path)
@@ -439,10 +442,11 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
     # First, check if the file needs updating (unless forced)
     if not force_upload:
         # Note: check_file_needs_update now uses Graph API internally
+        # Pass pre_calculated_hash if provided (for converted markdown using source .md hash)
         needs_update, exists, remote_file, local_hash = check_file_needs_update(
             local_path, file_name, site_url, list_name,
             filehash_column_available, tenant_id, client_id, client_secret,
-            login_endpoint, graph_endpoint, upload_stats_dict, force_size_comparison
+            login_endpoint, graph_endpoint, upload_stats_dict, pre_calculated_hash, display_path
         )
 
         # If file doesn't need updating, skip it
@@ -453,7 +457,8 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         if exists and needs_update:
             is_file_update = True
             if is_debug_enabled():
-                print(f"[→] Uploading updated file: {local_path}")
+                display_name = display_path if display_path else file_name
+                print(f"[→] Uploading updated file: {display_name}")
                 if sanitized_name != file_name:
                     print(f"    (Original name: {file_name})")
             upload_stats_dict['replaced_files'] += 1
@@ -466,10 +471,15 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
             upload_stats_dict['new_files'] += 1
     else:
         # Force upload mode - always upload with new hash
-        # Calculate hash now since we skipped check_file_needs_update
-        local_hash = calculate_file_hash(local_path)
-        if local_hash and is_debug_enabled():
-            print(f"[#] Calculated hash for force upload: {local_hash[:8]}...")
+        # Use pre_calculated_hash if provided, otherwise calculate from file
+        if pre_calculated_hash:
+            local_hash = pre_calculated_hash
+            if is_debug_enabled():
+                print(f"[#] Using pre-calculated hash for force upload: {local_hash[:8]}...")
+        else:
+            local_hash = calculate_file_hash(local_path)
+            if local_hash and is_debug_enabled():
+                print(f"[#] Calculated hash for force upload: {local_hash[:8]}...")
 
         # Check if file exists by listing children
         try:
@@ -510,7 +520,8 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
             # Small file - use simple upload
             if is_debug_enabled():
                 action = "Updating" if is_file_update else "Uploading"
-                print(f"[→] {action} file with simple upload: {local_path} ({file_size:,} bytes)")
+                display_name = display_path if display_path else file_name
+                print(f"[→] {action} file with simple upload: {display_name} ({file_size:,} bytes)")
 
             # Read file content
             with open(local_path, 'rb') as f:
@@ -546,14 +557,11 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         # Update upload byte counter after successful upload
         upload_stats_dict['bytes_uploaded'] += file_size
 
-        # Calculate hash after upload if we didn't calculate it earlier (force_size_comparison mode)
-        if not local_hash and force_size_comparison:
-            local_hash = calculate_file_hash(local_path)
-            if local_hash and is_debug_enabled():
-                print(f"[#] Calculated hash after upload for converted file: {local_hash[:8]}...")
+        # Use pre_calculated_hash if provided, otherwise use local_hash from check or force mode
+        hash_to_save = pre_calculated_hash if pre_calculated_hash else local_hash
 
         # Try to set the FileHash metadata if we have a hash using direct REST API
-        if local_hash:
+        if hash_to_save:
             try:
                 # First get the list item data to find the item ID
                 list_item_data = get_sharepoint_list_item_by_filename(
@@ -567,7 +575,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
                     # Check if we should queue this for batch processing or process immediately
                     if metadata_queue is not None:
                         # Parallel mode: Queue metadata update for batch processing
-                        metadata_queue.put((item_id, sanitized_name, local_hash, is_file_update))
+                        metadata_queue.put((item_id, sanitized_name, hash_to_save, is_file_update))
                         if is_debug_enabled():
                             print(f"[#] Queued FileHash metadata update for batch processing")
                     else:
@@ -579,7 +587,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
                         if debug_metadata:
                             print(f"[DEBUG] Setting FileHash for {sanitized_name}")
                             print(f"[DEBUG] SharePoint list item ID: {item_id}")
-                            print(f"[DEBUG] About to set FileHash to: {local_hash}")
+                            print(f"[DEBUG] About to set FileHash to: {hash_to_save}")
 
                         # Update the FileHash field using REST API
                         success = update_sharepoint_list_item_field(
@@ -587,7 +595,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
                             list_name,
                             item_id,
                             'FileHash',
-                            local_hash,
+                            hash_to_save,
                             tenant_id,
                             client_id,
                             client_secret,
@@ -597,7 +605,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
 
                         if success:
                             if is_debug_enabled():
-                                print(f"[✓] FileHash metadata set: {local_hash[:8]}...")
+                                print(f"[✓] FileHash metadata set: {hash_to_save[:8]}...")
 
                             # Track hash save statistics
                             if is_file_update:
@@ -686,16 +694,20 @@ def upload_file_with_structure(site_id, drive_id, root_item_id, local_file_path,
     else:
         target_folder_id = root_item_id
 
+    # Calculate display path for debug output (use sanitized path as that's what SharePoint sees)
+    display_path = sanitized_rel_path
+
     # Upload the file to the target folder
     if is_debug_enabled():
-        print(f"[→] Processing file: {local_file_path}")
+        print(f"[→] Processing file: {display_path}")
     for i in range(max_retry):
         try:
             upload_file(
                 site_id, drive_id, target_folder_id, local_file_path, chunk_size, force_upload,
                 site_url, list_name, filehash_column_available,
                 tenant_id, client_id, client_secret, login_endpoint,
-                graph_endpoint, upload_stats_dict, metadata_queue=metadata_queue
+                graph_endpoint, upload_stats_dict, metadata_queue=metadata_queue,
+                display_path=display_path
             )
             break
         except Exception as e:

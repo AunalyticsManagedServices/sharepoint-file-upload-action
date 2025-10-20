@@ -3,7 +3,6 @@
 """
 SharePoint File Upload Script for GitHub Actions
 ================================================
-Compatible with Office365-REST-Python-Client v2.6.2+
 
 PURPOSE:
     This script automates file uploads from GitHub repositories to SharePoint/OneDrive,
@@ -15,6 +14,9 @@ SYNOPSIS:
                                  <file_path> [max_retry] [login_endpoint]
                                  [graph_endpoint] [recursive] [force_upload]
                                  [convert_md_to_html] [exclude_patterns]
+                                 [sync_delete] [sync_delete_whatif]
+                                 [max_upload_workers]
+                                 [debug] [debug_metadata]
 
 PARAMETERS:
     Required Parameters:
@@ -185,6 +187,190 @@ PARAMETERS:
         `Type`: String (comma-separated patterns)
         `Position`: 14
 
+    [sync_delete]
+        Enable mirror sync by deleting SharePoint files not in the local sync set.
+        Default: 'False'
+        Values: 'True' or 'False' (case-sensitive string)
+
+        When True:
+            - Lists all files in SharePoint target folder
+            - Compares with local files being synced
+            - Deletes orphaned files (exist in SharePoint but not locally)
+
+        When False:
+            - No files are deleted from SharePoint (safer default)
+            - Upload-only synchronization
+
+        Safety Measures:
+            - Only deletes within the specific upload_path folder
+            - Requires explicit 'True' flag to be enabled
+            - Full path comparison to prevent accidental deletions
+            - Detailed logging of all deletions
+            - Respects sync_delete_whatif flag for preview mode
+
+        Use Cases:
+            - Maintaining true mirror sync between repository and SharePoint
+            - Cleaning up renamed or moved files
+            - Removing obsolete documentation
+            - Keeping SharePoint folder in sync with repository state
+
+        Warning:
+            This is a destructive operation. Files deleted from SharePoint may
+            go to the recycle bin depending on SharePoint configuration, but
+            deletion should be considered permanent. Always test with
+            sync_delete_whatif=True first!
+
+        `Type`: String ('True'/'False')
+        `Position`: 15
+
+    [sync_delete_whatif]
+        Preview deletion operations without actually deleting files (WhatIf mode).
+        Default: 'True' (safer - preview only)
+        Values: 'True' or 'False' (case-sensitive string)
+        Requires: sync_delete='True' to have any effect
+
+        When True (WhatIf mode):
+            - Identifies orphaned files that would be deleted
+            - Prints list of files that would be deleted
+            - Statistics show "Files deleted (WhatIf)" count
+            - NO actual deletions occur
+
+        When False (Execution mode):
+            - Actually deletes orphaned files from SharePoint
+            - Prints list of files as they are deleted
+            - Statistics show "Files deleted" count
+            - Permanent deletion occurs
+
+        Recommended Workflow:
+            Step 1: Run with sync_delete=True, sync_delete_whatif=True (preview)
+            Step 2: Review console output showing files that would be deleted
+            Step 3: If satisfied, run with sync_delete=True, sync_delete_whatif=False (execute)
+
+        Troubleshooting:
+            If unexpected files are marked for deletion:
+            - Enable debug mode (debug=True) to see path comparison details
+            - Check that base_path calculation matches your expectations
+            - Verify .md to .html conversion is accounted for
+            - Ensure path separators are normalized correctly
+
+        `Type`: String ('True'/'False')
+        `Position`: 16
+
+    [max_upload_workers]
+        Maximum number of concurrent upload workers for parallel processing.
+        Default: 4 (Graph API concurrent request limit)
+        Range: 1-10 (values >10 are capped to 10 for API safety)
+
+        This controls how many files are uploaded simultaneously using
+        Python's ThreadPoolExecutor. More workers = faster uploads but
+        higher risk of hitting Graph API rate limits.
+
+        Graph API Limits (as of 2024):
+            - 4 concurrent requests per application (reduced from 20)
+            - Exceeding this causes HTTP 429 (throttling) responses
+            - Default of 4 respects this limit
+
+        ⚠️ IMPORTANT UPCOMING CHANGE (September 30, 2025):
+        Microsoft will reduce per-app/per-user throttling limits to HALF
+        the total per-tenant limit to prevent monopolization. This may
+        impact high-volume upload scenarios. The default of 4 workers
+        should remain safe, but monitor for increased 429 responses
+        after September 2025.
+
+        When to Adjust:
+            - Increase to 6-8 for high-bandwidth environments (risk throttling)
+            - Decrease to 2-3 if experiencing throttling (429 errors)
+            - Keep at 4 for most use cases (recommended)
+
+        Performance Impact:
+            - 4 workers: 5-10x faster than sequential for 50+ files
+            - 8 workers: Marginal improvement, higher throttling risk
+            - 2 workers: Safer but slower
+
+        Note: Upload workers handle network I/O, so more workers can improve
+        performance despite Python's GIL (Global Interpreter Lock).
+
+        `Type`: Integer
+        `Position`: 17
+
+    [debug]
+        Enable general debug output for execution flow and file processing.
+        Default: 'False'
+        Values: 'True' or 'False' (case-sensitive string)
+
+        When True, enables verbose logging for:
+            - File discovery and glob pattern matching results
+            - Individual file upload decisions (upload vs skip)
+            - Folder creation operations
+            - Hash comparison details
+            - Sync deletion path comparison (shows all SharePoint vs local files)
+            - Relative path calculations
+            - Markdown conversion decisions
+
+        When False:
+            - Standard output only (connection messages, file counts, final stats)
+            - Error messages still displayed
+            - Summary statistics still shown
+
+        Does NOT Control (use debug_metadata for these):
+            - Graph API HTTP request/response details
+            - SharePoint list item field inspection
+            - Column existence verification
+            - FileHash metadata operations
+
+        Use Cases:
+            - Troubleshooting why files are uploaded vs skipped
+            - Debugging sync deletion unexpected deletions
+            - Understanding base_path calculation
+            - Verifying exclusion pattern matches
+            - Tracing markdown to HTML conversion
+
+        Environment Variable:
+            Sets DEBUG=true environment variable for downstream modules
+
+        `Type`: String ('True'/'False')
+        `Position`: 18
+
+    [debug_metadata]
+        Enable metadata-specific debug output for Graph API and SharePoint operations.
+        Default: 'False'
+        Values: 'True' or 'False' (case-sensitive string)
+
+        When True, enables verbose logging for:
+            - Graph API HTTP requests and responses
+            - SharePoint list item field enumeration
+            - Column existence checks and creation attempts
+            - FileHash column value inspection
+            - Internal column name vs display name mapping
+            - Graph API batch request/response details
+            - Rate limiting header analysis
+
+        When False:
+            - Metadata operations still occur, just not logged verbosely
+            - Errors still displayed with basic context
+
+        Warning:
+            This produces EXTREMELY verbose output. Only enable when
+            specifically debugging Graph API or metadata issues.
+
+        Use Cases:
+            - Debugging FileHash column creation failures
+            - Investigating why FileHash values aren't being saved
+            - Troubleshooting Graph API permission issues
+            - Understanding why columns aren't detected
+            - Analyzing rate limiting behavior
+
+        Difference from debug flag:
+            - debug: General execution flow (file-level decisions)
+            - debug_metadata: Graph API internals (field-level operations)
+            - Both can be enabled simultaneously
+
+        Environment Variable:
+            Sets DEBUG_METADATA=true environment variable for downstream modules
+
+        `Type`: String ('True'/'False')
+        `Position`: 19
+
 DESCRIPTION:
     - Intelligently syncs files to SharePoint, skipping unchanged files
     - Compares file size and modification time to detect changes
@@ -264,19 +450,96 @@ EXAMPLES:
                login.microsoftonline.com graph.microsoft.com True False False ^
                "*.log,*.tmp,*.bak,Thumbs.db,.DS_Store"
 
+    12. Mirror sync with deletion preview (WhatIf mode):
+        python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+               tenant-guid-here client-guid-here client-secret-here \\
+               "Documents/Mirror" "docs/**/*" 3 \\
+               login.microsoftonline.com graph.microsoft.com True False True \\
+               "" True True
+
+        # This will show what files would be deleted without actually deleting them.
+        # Review the output, then run again with sync_delete_whatif=False to execute.
+
+    13. Mirror sync with actual deletion (after WhatIf review):
+        python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+               tenant-guid-here client-guid-here client-secret-here \\
+               "Documents/Mirror" "docs/**/*" 3 \\
+               login.microsoftonline.com graph.microsoft.com True False True \\
+               "" True False
+
+        # WARNING: This will ACTUALLY DELETE orphaned files from SharePoint!
+        # Only run after reviewing WhatIf output from example 12.
+
+    14. High-performance parallel upload (8 workers):
+        python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+               tenant-guid-here client-guid-here client-secret-here \\
+               "Documents/BigUpload" "assets/**/*" 3 \\
+               login.microsoftonline.com graph.microsoft.com True False False \\
+               "" False True 8
+
+        # Uses 8 concurrent upload workers for faster uploads on high-bandwidth connections.
+        # Risk: May trigger throttling (429 errors) on slower connections.
+
+    15. Conservative parallel upload (2 workers):
+        python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+               tenant-guid-here client-guid-here client-secret-here \\
+               "Documents/Careful" "files/**/*" 5 \\
+               login.microsoftonline.com graph.microsoft.com True False False \\
+               "" False True 2
+
+        # Uses only 2 concurrent workers to minimize throttling risk.
+        # Slower but safer for unstable connections.
+
+    16. Debug mode for troubleshooting upload decisions:
+        python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+               tenant-guid-here client-guid-here client-secret-here \\
+               "Documents/Debug" "**/*.md" 3 \\
+               login.microsoftonline.com graph.microsoft.com True False True \\
+               "" False True 4 True False
+
+        # Enables general debug output (position 18) to see file processing decisions.
+        # Shows why each file is uploaded vs skipped, folder operations, etc.
+
+    17. Full debug mode for Graph API troubleshooting:
+        python send_to_sharepoint.py TeamSite company.sharepoint.com \\
+               tenant-guid-here client-guid-here client-secret-here \\
+               "Documents/APIDebug" "*.pdf" 3 \\
+               login.microsoftonline.com graph.microsoft.com False False False \\
+               "" False True 4 True True
+
+        # Enables both debug flags (positions 18 and 19) for maximum verbosity.
+        # WARNING: Produces EXTREMELY verbose output. Only use for debugging.
+
     Note: On Windows CMD, use ^ for line continuation instead of \\
 
 REQUIREMENTS:
-    - Python 3.6 or higher
-    - office365-rest-python-client >= 2.6.2
-    - msal (Microsoft Authentication Library)
-    - Azure AD Enterprise Application with Graph API Sites.ReadWrite.All permission
+    - Python 3.11 or higher (Alpine Linux 3.19 in Docker)
+    - requests >= 2.31.0 (HTTP client for Graph REST API)
+    - msal >= 1.28.0 (Microsoft Authentication Library)
+    - xxhash >= 3.5.0 (Ultra-fast file hashing)
+    - mistune >= 3.1.4 (Markdown parsing)
+    - python-dotenv >= 1.1.1 (Environment variable loading)
+    - Node.js and @mermaid-js/mermaid-cli >= 11.4.2 (Mermaid diagram rendering)
+    - Azure AD Enterprise Application with Graph API permissions:
+        - Sites.ReadWrite.All (file operations and deletion)
+        - Sites.Manage.All (FileHash column creation - optional)
+        - Sites.Selected (granular site access - recommended)
 
 AUTHOR:
     Mark Newton
 
 VERSION:
-    3.0.0 - Added smart sync, markdown to HTML conversion with Mermaid SVG support
+    4.1.1 - Security updates and Graph API throttling warning
+
+    Version History:
+        4.1.1 (2025-01) - Updated packages for security (requests 2.32.5, msal 1.34.0, xxhash 3.6.0)
+                          Added Sept 30, 2025 Graph API throttling change warnings
+        4.1.0 (2025-01) - Size-only comparison for converted markdown files
+        4.0.0 (2025-01) - Direct Graph REST API, parallel processing, batch metadata
+        3.1.0 (2025-01) - Enhanced statistics, sync deletion debugging
+        3.0.0 (2024-12) - Modular architecture refactoring
+        2.x   (2024)    - Hash-based comparison with FileHash column
+        1.x   (2024)    - Initial release with timestamp-based comparison
 """
 
 # ====================================
@@ -717,7 +980,6 @@ def main():
     cpu_count = os.cpu_count() or 4
     print(f"CPU Cores Available:       {cpu_count}")
     print(f"Upload Workers:            {config.max_upload_workers} (concurrent uploads)")
-    print(f"Hash Workers:              {config.max_hash_workers} (parallel hashing)")
     print(f"Markdown Workers:          {config.max_markdown_workers} (parallel conversion)")
     print(f"Batch Metadata Updates:    Enabled (20 items/batch)")
     print("="*60 + "\n")
@@ -824,7 +1086,7 @@ def main():
     converted_md_files = set()
 
     # Show parallel processing info
-    print(f"[OK] Using parallel processing (Upload workers: {config.max_upload_workers}, Hash workers: {config.max_hash_workers})")
+    print(f"[OK] Using parallel processing (Upload workers: {config.max_upload_workers})")
 
     # Initialize parallel uploader with auto-detected workers
     parallel_uploader = ParallelUploader(
