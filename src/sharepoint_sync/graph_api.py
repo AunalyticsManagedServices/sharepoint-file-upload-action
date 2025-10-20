@@ -2130,23 +2130,49 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
                     # Process batch response
                     batch_results = batch_response.json().get('responses', [])
 
+                    # Debug: Check if we got all responses
+                    if is_debug_enabled() and len(batch_results) != len(batch):
+                        print(f"[DEBUG] Warning: Expected {len(batch)} responses but got {len(batch_results)}")
+
+                    # Track how many items we process from this batch
+                    batch_processed = 0
+
                     for result in batch_results:
-                        request_id = int(result['id'])
-                        item_id, filename, hash_value, display_path = batch[request_id]
+                        try:
+                            request_id = int(result['id'])
+                            if request_id >= len(batch):
+                                print(f"[DEBUG] Error: request_id {request_id} out of range for batch size {len(batch)}")
+                                continue
 
-                        # Check if update succeeded (2xx status code)
-                        success = 200 <= result['status'] < 300
+                            item_id, filename, hash_value, display_path = batch[request_id]
 
-                        if success:
-                            results[item_id] = True
+                            # Check if update succeeded (2xx status code)
+                            success = 200 <= result['status'] < 300
+
+                            # Always add to results dictionary regardless of success/failure
+                            results[item_id] = success
+                            batch_processed += 1
+
                             if debug_metadata:
-                                # Show relative path and sanitized filename for better context
-                                print(f"[DEBUG] ✓ Updated FileHash for {display_path} ({filename})")
-                        else:
-                            results[item_id] = False
-                            if debug_metadata:
-                                # Show relative path and sanitized filename for better context
-                                print(f"[DEBUG] × Failed to update FileHash for {display_path} ({filename}): {result.get('status')}")
+                                if success:
+                                    # Show relative path and sanitized filename for better context
+                                    print(f"[DEBUG] ✓ Updated FileHash for {display_path} ({filename})")
+                                else:
+                                    # Show relative path and sanitized filename for better context
+                                    print(f"[DEBUG] × Failed to update FileHash for {display_path} ({filename}): {result.get('status')}")
+                        except Exception as item_error:
+                            print(f"[DEBUG] Error processing batch result: {str(item_error)[:200]}")
+                            continue
+
+                    # Ensure all items in batch are accounted for
+                    if batch_processed < len(batch):
+                        print(f"[DEBUG] Warning: Only processed {batch_processed}/{len(batch)} items from batch {batch_index}")
+                        # Add missing items as failed
+                        for item_id, _, _, _ in batch:
+                            if item_id not in results:
+                                results[item_id] = False
+                                if is_debug_enabled():
+                                    print(f"[DEBUG] Marking unprocessed item {item_id} as failed")
 
                     if is_debug_enabled():
                         success_count = sum(1 for r in batch_results if 200 <= r['status'] < 300)
@@ -2174,7 +2200,12 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
         total_failed = len(results) - total_success
 
         if is_debug_enabled():
+            print(f"[DEBUG] Final results dictionary contains {len(results)} items")
             print(f"[#] Batch update summary: {total_success} succeeded, {total_failed} failed")
+
+            # Extra debug: Show if we're missing any items
+            if len(results) != len(updates_list):
+                print(f"[DEBUG] WARNING: Started with {len(updates_list)} updates but only have {len(results)} results!")
 
         return results
 

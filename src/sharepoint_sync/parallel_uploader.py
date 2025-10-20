@@ -475,12 +475,22 @@ class ParallelUploader:
             library_name (str): SharePoint library name
         """
         if not self.metadata_queue or self.metadata_queue.empty():
+            if is_debug_enabled():
+                print(f"[DEBUG] Metadata queue is empty - nothing to flush")
             return
+
+        # Check queue size before processing
+        queue_size = self.metadata_queue.qsize()
+        if is_debug_enabled():
+            print(f"[DEBUG] Metadata queue contains approximately {queue_size} items")
 
         print(f"[#] Processing remaining metadata updates...")
 
         # Get all remaining items
         remaining = self.metadata_queue.get_all_remaining()
+        if is_debug_enabled():
+            print(f"[DEBUG] Retrieved {len(remaining)} items from queue")
+
         if remaining:
             # Add delay for complex file types to allow SharePoint processing to complete
             # Different file types need processing time: virus scan, content indexing, conversion, sanitization
@@ -549,6 +559,13 @@ class ParallelUploader:
                 config.login_endpoint, config.graph_endpoint
             )
 
+            # Debug: Show what we got back
+            if is_debug_enabled():
+                total_results = len(results)
+                success_count = sum(1 for success in results.values() if success)
+                failed_count = total_results - success_count
+                print(f"[DEBUG] batch_update_filehash_fields returned {total_results} results: {success_count} succeeded, {failed_count} failed")
+
             # Collect ALL failed items for potential retry (not just HTML)
             failed_items = []
 
@@ -579,7 +596,8 @@ class ParallelUploader:
                     else:
                         # Item not found in batch_lookup - this shouldn't happen but log it
                         if is_debug_enabled():
-                            print(f"[DEBUG] Warning: Failed item_id {item_id} not found in batch lookup")
+                            print(f"[DEBUG] Warning: Failed item_id {item_id} (str: {item_id_str}) not found in batch lookup")
+                            print(f"[DEBUG] Batch lookup keys: {list(batch_lookup.keys())[:5]}...")  # Show first 5 keys
 
                     self.stats_wrapper.increment('hash_save_failed')
 

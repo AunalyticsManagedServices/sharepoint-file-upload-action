@@ -578,7 +578,8 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
                         # Include display_path for better debug output
                         metadata_queue.put((item_id, sanitized_name, hash_to_save, is_file_update, display_path))
                         if is_debug_enabled():
-                            print(f"[#] Queued FileHash metadata update for batch processing")
+                            queue_size = metadata_queue.qsize() if hasattr(metadata_queue, 'qsize') else 'unknown'
+                            print(f"[#] Queued FileHash update for {display_path} (queue size: {queue_size})")
                     else:
                         # Sequential mode: Update immediately (backward compatibility)
                         if is_debug_enabled():
