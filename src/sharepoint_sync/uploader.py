@@ -18,7 +18,6 @@ from .file_handler import (
 )
 from .graph_api import (
     update_sharepoint_list_item_field,
-    get_sharepoint_list_item_by_filename,
     create_folder_graph,
     list_folder_children_graph,
     upload_small_file_graph,
@@ -443,10 +442,12 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
     if not force_upload:
         # Note: check_file_needs_update now uses Graph API internally
         # Pass pre_calculated_hash if provided (for converted markdown using source .md hash)
+        # Pass site_id, drive_id, parent_item_id for path-based queries (fixes duplicate filename bug)
         needs_update, exists, remote_file, local_hash = check_file_needs_update(
             local_path, file_name, site_url, list_name,
             filehash_column_available, tenant_id, client_id, client_secret,
-            login_endpoint, graph_endpoint, upload_stats_dict, pre_calculated_hash, display_path
+            login_endpoint, graph_endpoint, upload_stats_dict, pre_calculated_hash, display_path,
+            site_id, drive_id, parent_item_id
         )
 
         # If file doesn't need updating, skip it

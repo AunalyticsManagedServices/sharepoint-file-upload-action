@@ -351,10 +351,66 @@ class ParallelUploader:
         try:
             # Calculate hash of source .md file BEFORE conversion
             # This hash will be used for the converted .html file in SharePoint
-            from .file_handler import calculate_file_hash
+            from .file_handler import calculate_file_hash, check_file_needs_update
             md_file_hash = calculate_file_hash(file_path)
             if md_file_hash and is_debug_enabled():
                 print(f"[#] Source .md file hash: {md_file_hash[:8]}... (will be used for .html file)")
+
+            # Determine target .html filename and folder BEFORE converting
+            # We need this to check if the file already exists with matching hash
+            original_html_path = file_path.replace('.md', '.html')
+            desired_html_filename = os.path.basename(original_html_path)
+
+            # Calculate relative path and target folder
+            if base_path:
+                rel_path_str = os.path.relpath(original_html_path, base_path)
+            else:
+                rel_path_str = original_html_path
+
+            # Normalize and sanitize
+            if isinstance(rel_path_str, bytes):
+                rel_path_str = rel_path_str.decode('utf-8')
+            rel_path_str = rel_path_str.replace('\\', '/')
+            sanitized_rel_path = sanitize_path_components(rel_path_str)
+            dir_path = os.path.dirname(sanitized_rel_path)
+
+            # Determine target folder ID
+            target_folder_id = root_item_id
+            if dir_path and dir_path != "." and dir_path != "":
+                from .uploader import ensure_folder_exists
+                target_folder_id = ensure_folder_exists(
+                    site_id, drive_id, root_item_id, dir_path,
+                    config.tenant_id, config.client_id, config.client_secret,
+                    config.login_endpoint, config.graph_endpoint
+                )
+
+            # EARLY CHECK: Does .html file already exist with matching source .md hash?
+            # This avoids expensive markdown conversion if source hasn't changed
+            if not config.force_upload and filehash_available:
+                if is_debug_enabled():
+                    print(f"[?] Checking if converted .html file needs update: {sanitized_rel_path}")
+
+                needs_update, exists, _, _ = check_file_needs_update(
+                    file_path,  # We pass .md file path for hash calculation (but hash already calculated)
+                    desired_html_filename,  # Check for .html file in SharePoint
+                    config.tenant_url, library_name, filehash_available,
+                    config.tenant_id, config.client_id, config.client_secret,
+                    config.login_endpoint, config.graph_endpoint,
+                    self.stats_wrapper,
+                    pre_calculated_hash=md_file_hash,  # Use source .md hash for comparison
+                    display_path=sanitized_rel_path,
+                    site_id=site_id, drive_id=drive_id, parent_item_id=target_folder_id
+                )
+
+                if not needs_update:
+                    # File exists and source .md hash matches - SKIP conversion entirely!
+                    if is_debug_enabled():
+                        print(f"[=] Skipping markdown conversion - source unchanged: {sanitized_rel_path}")
+                    return True  # Success - no work needed
+
+            # File needs update or doesn't exist - proceed with conversion
+            if is_debug_enabled():
+                print(f"[MD] Converting markdown to HTML: {file_path}")
 
             # Read markdown content
             with open(file_path, 'r', encoding='utf-8') as md_file_handle:
@@ -391,34 +447,8 @@ class ParallelUploader:
                 os.close(temp_html_fd)
                 raise write_error
 
-            # Calculate paths
-            original_html_path = file_path.replace('.md', '.html')
-
-            # Get relative path
-            if base_path:
-                rel_path_str = os.path.relpath(original_html_path, base_path)
-            else:
-                rel_path_str = original_html_path
-
-            # Normalize and sanitize (ensure str type)
-            if isinstance(rel_path_str, bytes):
-                rel_path_str = rel_path_str.decode('utf-8')
-            rel_path_str = rel_path_str.replace('\\', '/')
-            sanitized_rel_path = sanitize_path_components(rel_path_str)
-            dir_path = os.path.dirname(sanitized_rel_path)
-
-            # Determine target folder
-            if dir_path and dir_path != "." and dir_path != "":
-                from .uploader import ensure_folder_exists
-                target_folder_id = ensure_folder_exists(
-                    site_id, drive_id, root_item_id, dir_path,
-                    config.tenant_id, config.client_id, config.client_secret,
-                    config.login_endpoint, config.graph_endpoint
-                )
-            else:
-                target_folder_id = root_item_id
-
-            desired_html_filename = os.path.basename(original_html_path)
+            # Paths and target folder already calculated above (before early check)
+            # No need to recalculate: original_html_path, desired_html_filename, sanitized_rel_path, target_folder_id
 
             # Upload HTML file with source .md file hash
             # This allows hash-based comparison instead of size-only (solves Mermaid SVG ID variation issue)

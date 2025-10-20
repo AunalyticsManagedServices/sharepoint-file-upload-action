@@ -551,216 +551,6 @@ def rewrite_endpoint(request, graph_endpoint):
     )
 
 
-def get_sharepoint_list_item_by_filename(site_url, list_name, filename, tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
-    """
-    Get SharePoint list item by filename using direct Graph API REST calls.
-
-    Args:
-        site_url (str): Full SharePoint site URL
-        list_name (str): Name of the document library (usually "Documents")
-        filename (str): Name of the file to find
-        tenant_id (str): Azure AD tenant ID
-        client_id (str): App registration client ID
-        client_secret (str): App registration client secret
-        login_endpoint (str): Azure AD endpoint
-        graph_endpoint (str): Graph API endpoint
-
-    Returns:
-        dict: List item data with custom columns, or None if not found
-    """
-    try:
-        # Get debug flag
-        debug_metadata = is_debug_metadata_enabled()
-
-        # Get token for Graph API
-        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
-
-        if 'access_token' not in token:
-            print(f"[!] Failed to acquire token for Graph API: {token.get('error_description', 'Unknown error')}")
-            return None
-
-        headers = {
-            'Authorization': f"Bearer {token['access_token']}",
-            'Content-Type': 'application/json',
-            'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly'
-        }
-
-        # Parse site URL to get site ID
-        site_parts = site_url.replace('https://', '').split('/')
-        host_name = site_parts[0]
-        site_name = site_parts[2] if len(site_parts) > 2 else ''
-
-        if debug_metadata:
-            print(f"[DEBUG] Looking up file: {filename}")
-            print(f"[DEBUG] Site parts: host={host_name}, site={site_name}")
-
-        # Get site ID first
-        site_endpoint = f"https://{graph_endpoint}/v1.0/sites/{host_name}:/sites/{site_name}"
-        site_response = make_graph_request_with_retry(site_endpoint, headers, method='GET')
-
-        if site_response.status_code != 200:
-            print(f"[!] Failed to get site information: {site_response.status_code}")
-            if debug_metadata:
-                print(f"[DEBUG] Site endpoint: {site_endpoint}")
-                print(f"[DEBUG] Site response: {site_response.text[:300]}")
-            return None
-
-        site_data = site_response.json()
-        site_id = site_data.get('id')
-
-        if not site_id:
-            print("[!] Could not retrieve site ID")
-            if debug_metadata:
-                print(f"[DEBUG] Site data keys: {list(site_data.keys())}")
-            return None
-
-        if debug_metadata:
-            print(f"[DEBUG] Site ID: {site_id}")
-
-        # Get the document library (list) ID
-        lists_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists"
-        lists_response = make_graph_request_with_retry(lists_endpoint, headers, method='GET')
-
-        if lists_response.status_code != 200:
-            print(f"[!] Failed to get lists: {lists_response.status_code}")
-            if debug_metadata:
-                print(f"[DEBUG] Lists response: {lists_response.text[:300]}")
-            return None
-
-        lists_data = lists_response.json()
-        list_id = None
-
-        if debug_metadata:
-            available_lists = [lst.get('displayName', 'N/A') for lst in lists_data.get('value', [])]
-            print(f"[DEBUG] Available lists: {available_lists}")
-
-        for sp_list in lists_data.get('value', []):
-            if sp_list.get('displayName') == list_name or sp_list.get('name') == list_name:
-                list_id = sp_list.get('id')
-                if debug_metadata:
-                    print(f"[DEBUG] Found list '{list_name}' with ID: {list_id}")
-                break
-
-        if not list_id:
-            print(f"[!] Could not find list '{list_name}'")
-            return None
-
-        # Check if FileHash column exists in the list before trying to retrieve items
-        if debug_metadata:
-            print(f"[DEBUG] Checking for FileHash column in list...")
-            columns_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/columns"
-            columns_response = make_graph_request_with_retry(columns_endpoint, headers=headers)
-
-            if columns_response.status_code == 200:
-                columns_data = columns_response.json()
-                filehash_column_found = False
-                column_names = []
-
-                for column in columns_data.get('value', []):
-                    col_name = column.get('name', 'N/A')
-                    col_display_name = column.get('displayName', 'N/A')
-                    column_names.append(f"{col_name} ({col_display_name})")
-
-                    if col_name == 'FileHash' or col_display_name == 'FileHash':
-                        filehash_column_found = True
-                        print(f"[DEBUG] ✓ FileHash column found: name='{col_name}', displayName='{col_display_name}'")
-                        print(f"[DEBUG] Column details: {column}")
-
-                if not filehash_column_found:
-                    print(f"[DEBUG] X FileHash column NOT found in list")
-
-                print(f"[DEBUG] Available columns: {column_names[:10]}...")  # Show first 10 columns
-            else:
-                print(f"[DEBUG] Failed to get columns: {columns_response.status_code}")
-
-        # Query list items by filename with expanded fields
-        # Try filtering by FileLeafRef first, fallback to getting all items if filter fails
-        items_endpoint = f"https://{graph_endpoint}/v1.0/sites/{site_id}/lists/{list_id}/items"
-
-        # First attempt: Use OData filter
-        # IMPORTANT: Custom columns like FileHash must be explicitly requested using $select
-        # Standard fields are included by default, but custom columns require explicit selection
-        items_params = {
-            '$expand': 'fields($select=FileHash,FileLeafRef,FileSizeDisplay,File_x0020_Size)',
-            '$filter': f"fields/FileLeafRef eq '{filename}'"
-        }
-
-        if debug_metadata:
-            print(f"[DEBUG] Attempting filtered query for: {filename}")
-            print(f"[DEBUG] Items endpoint: {items_endpoint}")
-
-        items_response = make_graph_request_with_retry(items_endpoint, headers=headers, params=items_params)
-
-        if items_response.status_code != 200:
-            print(f"[!] Failed to get list items with filter: {items_response.status_code}")
-            if debug_metadata:
-                print(f"[DEBUG] Filter request URL: {items_response.url}")
-                print(f"[DEBUG] Response: {items_response.text[:500]}")
-
-            # Fallback: Get all items and filter in Python
-            print(f"[DEBUG] Trying fallback: getting all items and filtering in Python...")
-            # Explicitly request custom FileHash column in fallback as well
-            items_params = {'$expand': 'fields($select=FileHash,FileLeafRef,FileSizeDisplay,File_x0020_Size)'}
-            items_response = make_graph_request_with_retry(items_endpoint, headers=headers, params=items_params)
-
-            if items_response.status_code != 200:
-                print(f"[!] Failed to get list items (fallback): {items_response.status_code}")
-                if debug_metadata:
-                    print(f"[DEBUG] Fallback response: {items_response.text[:500]}")
-                return None
-
-        items_data = items_response.json()
-        items = items_data.get('value', [])
-
-        # Filter items in Python to find matching filename
-        if debug_metadata:
-            print(f"[DEBUG] Searching through {len(items)} items for '{filename}'")
-
-        for item in items:
-            if 'fields' in item and item['fields']:
-                file_leaf_ref = item['fields'].get('FileLeafRef')
-                if file_leaf_ref == filename:
-                    if debug_metadata:
-                        print(f"[DEBUG] ✓ Found matching item: {file_leaf_ref}")
-                        print(f"[DEBUG] Item ID: {item.get('id', 'N/A')}")
-                        print(f"[DEBUG] All available fields in item: {list(item['fields'].keys())}")
-
-                        # Check specifically for FileHash field
-                        filehash_value = item['fields'].get('FileHash')
-                        if filehash_value:
-                            print(f"[DEBUG] ✓ FileHash found in item: {filehash_value}")
-                        else:
-                            print(f"[DEBUG] X FileHash NOT found in item fields")
-
-                        # Show sample of field values for debugging
-                        field_sample = {}
-                        for key, value in list(item['fields'].items())[:5]:  # First 5 fields
-                            field_sample[key] = str(value)[:50] if value else 'None'
-                        print(f"[DEBUG] Sample field values: {field_sample}")
-
-                    return item
-
-        if debug_metadata:
-            print(f"[DEBUG] X No matching item found for '{filename}'")
-            if items and len(items) > 0:
-                sample_names = [item.get('fields', {}).get('FileLeafRef', 'N/A') for item in items[:3]]
-                print(f"[DEBUG] Sample FileLeafRef values from list: {sample_names}")
-
-                # Show what fields are available in the first item
-                if items[0].get('fields'):
-                    sample_fields = list(items[0]['fields'].keys())[:10]
-                    print(f"[DEBUG] Sample fields available in first item: {sample_fields}")
-
-        return None
-
-    except Exception as e:
-        print(f"[!] Error getting list item by filename: {str(e)[:400]}")
-        if is_debug_metadata_enabled():
-            import traceback
-            print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
-        return None
-
-
 def update_sharepoint_list_item_field(site_url, list_name, item_id, field_name, field_value, tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
     """
     Update a custom field in a SharePoint list item using direct Graph API REST calls.
@@ -2304,12 +2094,23 @@ def batch_update_filehash_fields(site_url, list_name, updates_list,
                             if requery_item_ids:
                                 key = global_idx
                                 list_item_id = item_id_map.get(global_idx)
+                                display_path = item[5]
+                                filename = item[1]
                             else:
                                 list_item_id = item[0]
                                 key = list_item_id
+                                display_path = item[3]
+                                filename = item[1]
 
                             success = 200 <= result['status'] < 300
                             results[key] = success
+
+                            # Show individual file success/failure
+                            if success:
+                                if is_debug_enabled():
+                                    print(f"[DEBUG] ✓ Updated FileHash for {display_path} ({filename})")
+                            else:
+                                print(f"[DEBUG] × Failed to update FileHash for {display_path} ({filename}): HTTP {result.get('status')}")
 
                         except Exception:
                             continue

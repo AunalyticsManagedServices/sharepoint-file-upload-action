@@ -262,7 +262,8 @@ def should_exclude_path(path, exclude_patterns):
 
 def check_file_needs_update(local_path, file_name, site_url, list_name, filehash_column_available,
                             tenant_id=None, client_id=None, client_secret=None, login_endpoint=None,
-                            graph_endpoint=None, upload_stats_dict=None, pre_calculated_hash=None, display_path=None):
+                            graph_endpoint=None, upload_stats_dict=None, pre_calculated_hash=None, display_path=None,
+                            site_id=None, drive_id=None, parent_item_id=None):
     """
     Check if a file in SharePoint needs to be updated by comparing hash or size.
 
@@ -287,6 +288,9 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                                              (useful for converted markdown where source .md hash is used)
         display_path (str, optional): Relative path for display in debug output (e.g., 'docs/api/README.html')
                                      If not provided, falls back to sanitized_name
+        site_id (str, optional): SharePoint site ID for path-based queries (preferred method)
+        drive_id (str, optional): SharePoint drive ID for path-based queries (preferred method)
+        parent_item_id (str, optional): Parent folder item ID for path-based queries (preferred method)
 
     Returns:
         tuple: (needs_update: bool, exists: bool, remote_file: None, local_hash: str or None)
@@ -298,7 +302,8 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
     Example:
         needs_update, exists, remote, hash_val = check_file_needs_update(
             "/path/to/file.pdf", "file.pdf", "site.sharepoint.com", "Documents", True,
-            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
+            site_id=site_id, drive_id=drive_id, parent_item_id=parent_item_id
         )
         if not needs_update:
             print("File is up to date, skipping")
@@ -341,13 +346,40 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
         # Try to get file metadata using Graph REST API
         if all([tenant_id, client_id, client_secret, login_endpoint, graph_endpoint]):
             try:
-                # Use direct Graph API REST calls to get SharePoint list item with custom columns
-                from .graph_api import get_sharepoint_list_item_by_filename
+                # Prefer path-based query (most reliable, especially for duplicate filenames)
+                list_item_data = None
+                if all([site_id, drive_id, parent_item_id]):
+                    if is_debug_enabled():
+                        print(f"[DEBUG] Querying by path: parent={parent_item_id}, file={sanitized_name}")
 
-                list_item_data = get_sharepoint_list_item_by_filename(
-                    site_url, list_name, sanitized_name,
-                    tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
-                )
+                    # Use path-based query to get exact file (fixes duplicate filename bug)
+                    from .graph_api import get_drive_item_by_path_with_list_item
+
+                    item_with_list = get_drive_item_by_path_with_list_item(
+                        site_id, drive_id, parent_item_id, sanitized_name,
+                        tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                    )
+
+                    # Extract listItem fields from the response
+                    if item_with_list and 'listItem' in item_with_list:
+                        list_item_data = {
+                            'fields': item_with_list['listItem'].get('fields', {})
+                        }
+                        if is_debug_enabled():
+                            print(f"[DEBUG] Retrieved file metadata by path")
+
+                # If path-based query failed, we cannot reliably check the file
+                # (filename-only search is unreliable for duplicate names)
+                if not list_item_data:
+                    if is_debug_enabled():
+                        print(f"[DEBUG] Could not retrieve file metadata by path")
+                        print(f"[DEBUG] Missing required parameters: site_id={site_id is not None}, drive_id={drive_id is not None}, parent_item_id={parent_item_id is not None}")
+
+                    # Without path-based query, we must assume file needs update
+                    # This is safer than using unreliable filename-only search
+                    if is_debug_enabled():
+                        print(f"[!] Cannot verify file status, assuming needs update: {sanitized_name}")
+                    return True, False, None, local_hash
 
                 if list_item_data and 'fields' in list_item_data:
                     file_exists = True  # File found in SharePoint
