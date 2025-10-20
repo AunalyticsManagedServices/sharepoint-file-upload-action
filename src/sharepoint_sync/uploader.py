@@ -560,18 +560,66 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
         # Use pre_calculated_hash if provided, otherwise use local_hash from check or force mode
         hash_to_save = pre_calculated_hash if pre_calculated_hash else local_hash
 
-        # Try to set the FileHash metadata if we have a hash using direct REST API
-        if hash_to_save:
+        # Try to set the FileHash metadata if we have a hash
+        if hash_to_save and uploaded_item:
             try:
-                # First get the list item data to find the item ID
-                list_item_data = get_sharepoint_list_item_by_filename(
-                    site_url, list_name, sanitized_name,
-                    tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
-                )
+                # Get list item ID from the uploaded drive item
+                # We know exactly where we uploaded (parent_item_id + sanitized_name),
+                # so we can query the Graph API by path to get the listItem ID.
+                item_id = None
 
-                if list_item_data and 'id' in list_item_data:
-                    item_id = list_item_data['id']
+                # Primary method: Query by path (most direct since we know the location)
+                if is_debug_enabled():
+                    print(f"[DEBUG] Fetching list item ID by path: parent={parent_item_id}, file={sanitized_name}")
 
+                try:
+                    from .graph_api import get_drive_item_by_path_with_list_item
+                    item_with_list = get_drive_item_by_path_with_list_item(
+                        site_id, drive_id, parent_item_id, sanitized_name,
+                        tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                    )
+                    if item_with_list and 'listItem' in item_with_list and 'id' in item_with_list['listItem']:
+                        item_id = item_with_list['listItem']['id']
+                        if is_debug_enabled():
+                            print(f"[DEBUG] Got list item ID by path: {item_id}")
+                except Exception as fetch_error:
+                    if is_debug_enabled():
+                        print(f"[DEBUG] Failed to fetch by path: {str(fetch_error)[:200]}")
+
+                    # Fallback: If upload response has listItem (unlikely but check)
+                    if 'listItem' in uploaded_item and 'id' in uploaded_item['listItem']:
+                        item_id = uploaded_item['listItem']['id']
+                        if is_debug_enabled():
+                            print(f"[DEBUG] Got list item ID from upload response: {item_id}")
+                    # Fallback: Try fetching by drive item ID
+                    elif 'id' in uploaded_item:
+                        if is_debug_enabled():
+                            print(f"[DEBUG] Trying fallback: fetch by drive item ID: {uploaded_item['id']}")
+                        try:
+                            from .graph_api import get_drive_item_with_list_item
+                            item_with_list = get_drive_item_with_list_item(
+                                site_id, drive_id, uploaded_item['id'],
+                                tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+                            )
+                            if item_with_list and 'listItem' in item_with_list and 'id' in item_with_list['listItem']:
+                                item_id = item_with_list['listItem']['id']
+                                if is_debug_enabled():
+                                    print(f"[DEBUG] Got list item ID from drive item ID: {item_id}")
+                        except Exception as id_fetch_error:
+                            if is_debug_enabled():
+                                print(f"[DEBUG] Failed to fetch by ID: {str(id_fetch_error)[:200]}")
+
+                if not item_id:
+                    # This should rarely happen - we should always be able to query by path
+                    print(f"[!] ERROR: Could not get list item ID for {display_path}")
+                    print(f"[!] This indicates a critical issue with Graph API access")
+                    if is_debug_enabled():
+                        print(f"[DEBUG] parent_item_id={parent_item_id}, filename={sanitized_name}")
+                        print(f"[DEBUG] uploaded_item keys: {list(uploaded_item.keys()) if uploaded_item else 'None'}")
+                    # Don't use filename-only search - it's unreliable for duplicate filenames
+                    # The metadata update will be skipped for this file
+
+                if item_id:
                     # Check if we should queue this for batch processing or process immediately
                     if metadata_queue is not None:
                         # Parallel mode: Queue metadata update for batch processing
@@ -579,7 +627,7 @@ def upload_file(site_id, drive_id, parent_item_id, local_path, chunk_size, force
                         metadata_queue.put((item_id, sanitized_name, hash_to_save, is_file_update, display_path))
                         if is_debug_enabled():
                             queue_size = metadata_queue.qsize() if hasattr(metadata_queue, 'qsize') else 'unknown'
-                            print(f"[#] Queued FileHash update for {display_path} (queue size: {queue_size})")
+                            print(f"[#] Queued FileHash update for {display_path} (item_id: {item_id}, queue size: {queue_size})")
                     else:
                         # Sequential mode: Update immediately (backward compatibility)
                         if is_debug_enabled():

@@ -1643,6 +1643,124 @@ def get_drive_item_by_path(site_url, folder_path, tenant_id, client_id,
         return None
 
 
+def get_drive_item_by_path_with_list_item(site_id, drive_id, parent_item_id, filename,
+                                           tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
+    """
+    Get a drive item by path with its list item property expanded.
+
+    This is the most direct way to get the list item ID after upload, since we know
+    exactly where we uploaded the file (parent folder + filename).
+
+    Args:
+        site_id (str): SharePoint site ID
+        drive_id (str): SharePoint drive ID
+        parent_item_id (str): Parent folder item ID
+        filename (str): Filename (should be URL-encoded if contains special chars)
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
+
+    Returns:
+        dict: Drive item with listItem property containing the list item ID
+        None: If fetch failed
+
+    Example:
+        After uploading to /items/ABC123:/{filename}:/content
+        We can get it at /items/ABC123:/{filename}?$expand=listItem
+    """
+    try:
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            return None
+
+        # URL encode the filename (should already be encoded but ensure it)
+        import urllib.parse
+        encoded_filename = urllib.parse.quote(filename)
+
+        # Fetch drive item by path with listItem expanded
+        # Uses the same path structure as upload: /items/{parent-id}:/{filename}
+        item_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{parent_item_id}:/{encoded_filename}?$expand=listItem"
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Accept': 'application/json'
+        }
+
+        if is_debug_enabled():
+            print(f"[DEBUG] Fetching drive item by path with listItem")
+
+        response = make_graph_request_with_retry(item_url, headers, method='GET')
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            if is_debug_enabled():
+                print(f"[DEBUG] Failed to fetch drive item by path: {response.status_code} - {response.text[:200]}")
+            return None
+
+    except Exception as e:
+        if is_debug_enabled():
+            print(f"[DEBUG] Error fetching drive item by path: {str(e)[:200]}")
+        return None
+
+
+def get_drive_item_with_list_item(site_id, drive_id, item_id,
+                                   tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
+    """
+    Get a drive item by ID with its list item property expanded.
+
+    This is a fallback method when we have the drive item ID but not the path.
+    Prefer using get_drive_item_by_path_with_list_item() when possible since
+    we usually know the exact path where we uploaded.
+
+    Args:
+        site_id (str): SharePoint site ID
+        drive_id (str): SharePoint drive ID
+        item_id (str): Drive item ID (file ID in the drive)
+        tenant_id (str): Azure AD tenant ID
+        client_id (str): Azure AD application client ID
+        client_secret (str): Azure AD application client secret
+        login_endpoint (str): Azure AD login endpoint
+        graph_endpoint (str): Microsoft Graph API endpoint
+
+    Returns:
+        dict: Drive item with listItem property
+        None: If fetch failed
+    """
+    try:
+        # Get authentication token
+        from .auth import acquire_token
+        token = acquire_token(tenant_id, client_id, client_secret, login_endpoint, graph_endpoint)
+        if not token:
+            return None
+
+        # Fetch drive item with listItem expanded
+        item_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{item_id}?$expand=listItem"
+
+        headers = {
+            'Authorization': f"Bearer {token['access_token']}",
+            'Accept': 'application/json'
+        }
+
+        response = make_graph_request_with_retry(item_url, headers, method='GET')
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            if is_debug_enabled():
+                print(f"[DEBUG] Failed to fetch drive item by ID: {response.status_code} - {response.text[:200]}")
+            return None
+
+    except Exception as e:
+        if is_debug_enabled():
+            print(f"[DEBUG] Error fetching drive item by ID: {str(e)[:200]}")
+        return None
+
+
 def upload_small_file_graph(site_id, drive_id, parent_item_id, filename, file_content,
                             tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
     """
@@ -1682,6 +1800,9 @@ def upload_small_file_graph(site_id, drive_id, parent_item_id, filename, file_co
         encoded_filename = urllib.parse.quote(filename)
 
         # Upload endpoint: PUT /items/{parent-id}:/{filename}:/content
+        # Note: Upload endpoint does not officially support $expand parameter
+        # (Graph API error: "The type 'Edm.Stream' is not valid for $select or $expand")
+        # We'll fetch the listItem separately after upload if needed
         upload_url = f"https://{graph_endpoint}/v1.0/sites/{site_id}/drives/{drive_id}/items/{parent_item_id}:/{encoded_filename}:/content"
 
         headers = {
