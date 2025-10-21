@@ -275,7 +275,14 @@ class UploadStatistics:
             # Cache performance statistics
             'cache_hits': 0,          # Successful cache lookups (avoided API call)
             'cache_misses': 0,        # Files not in cache (new files)
-            'api_queries': 0          # API queries needed (fallback when cache unavailable)
+            'api_queries': 0,         # API queries needed (fallback when cache unavailable)
+            # Markdown conversion statistics
+            'md_no_changes': 0,       # Markdown files checked but unchanged (skipped)
+            'md_converted': 0,        # Markdown files actually converted to HTML
+            'md_conversion_failed': 0,  # Markdown files that failed conversion
+            # Mermaid diagram statistics
+            'mermaid_diagrams_rendered': 0,  # Mermaid diagrams successfully converted to SVG
+            'mermaid_diagrams_failed': 0     # Mermaid diagrams that failed (shown as code blocks)
         }
 
     def print_summary(self, total_files, whatif_mode=False):

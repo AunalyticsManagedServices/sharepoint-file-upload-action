@@ -549,6 +549,7 @@ VERSION:
 import sys
 import os
 import glob
+import time
 
 # SharePoint sync modules
 from sharepoint_sync.config import parse_config
@@ -844,6 +845,7 @@ def perform_sync_deletion(local_files, base_path, config, sharepoint_cache=None)
         - Compares full relative paths to avoid accidental deletions
         - Provides detailed logging of deletions
     """
+    sync_delete_start = time.time()
     debug_enabled = is_debug_enabled()
 
     # Step 1: Get list of files currently in SharePoint folder
@@ -930,7 +932,8 @@ def perform_sync_deletion(local_files, base_path, config, sharepoint_cache=None)
     files_to_delete = identify_files_to_delete(sharepoint_files, local_files_set)
 
     if not files_to_delete:
-        print("[OK] No orphaned files to delete from SharePoint")
+        sync_delete_elapsed = time.time() - sync_delete_start
+        print(f"\n[✓] No orphaned files to delete from SharePoint ({sync_delete_elapsed:.3f}s)")
         return 0
 
     # Step 4: Delete orphaned files (or show what would be deleted in WhatIf mode)
@@ -960,10 +963,11 @@ def perform_sync_deletion(local_files, base_path, config, sharepoint_cache=None)
         except Exception as e:
             print(f"[!] Error deleting {file_info['path']}: {str(e)}")
 
+    sync_delete_elapsed = time.time() - sync_delete_start
     if config.sync_delete_whatif:
-        print(f"[✓] WhatIf: Would delete {deleted_count} orphaned files from SharePoint")
+        print(f"\n[✓] WhatIf: Would delete {deleted_count} orphaned files from SharePoint ({sync_delete_elapsed:.3f}s)")
     else:
-        print(f"[✓] Successfully deleted {deleted_count} orphaned files from SharePoint")
+        print(f"\n[✓] Successfully deleted {deleted_count} orphaned files from SharePoint ({sync_delete_elapsed:.3f}s)")
     return deleted_count
 
 
@@ -1041,6 +1045,7 @@ def main():
     # ============================================================
     # [2/5] FILE DISCOVERY
     # ============================================================
+    discovery_start = time.time()
     print("\n" + "="*60)
     print("[2/5] FILE DISCOVERY")
     print("="*60)
@@ -1058,7 +1063,8 @@ def main():
         print("[!] No files matched the pattern")
         sys.exit(1)
 
-    print(f"[✓] Found {len(local_files)} files to process")
+    discovery_elapsed = time.time() - discovery_start
+    print(f"[✓] Found {len(local_files)} files to process ({discovery_elapsed:.3f}s)")
 
     # Calculate base path for maintaining folder structure
     base_path = calculate_base_path(local_files, local_dirs)
@@ -1066,6 +1072,7 @@ def main():
     # ============================================================
     # [3/5] SHAREPOINT CONNECTION
     # ============================================================
+    connection_start = time.time()
     print("\n" + "="*60)
     print("[3/5] SHAREPOINT CONNECTION")
     print("="*60)
@@ -1110,6 +1117,9 @@ def main():
         else:
             print("[!] FileHash column not available, will use size-based comparison")
 
+        connection_elapsed = time.time() - connection_start
+        print(f"\n[✓] SharePoint connection established ({connection_elapsed:.3f}s)")
+
     except Exception as conn_error:
         # Connection failed - provide helpful troubleshooting info
         print(f"[Error] Failed to connect to SharePoint: {conn_error}")
@@ -1130,6 +1140,7 @@ def main():
         # Cache is beneficial when:
         # - Smart sync mode (need file comparisons)
         # - Sync deletion enabled (need list of SharePoint files)
+        cache_start = time.time()
         print("\n" + "="*60)
         print("[4/5] BUILDING METADATA CACHE")
         print("="*60)
@@ -1146,10 +1157,13 @@ def main():
                 config.graph_endpoint,
                 filehash_column_available
             )
+            cache_elapsed = time.time() - cache_start
+            print(f"\n[✓] Cache built successfully ({cache_elapsed:.3f}s)")
         except Exception as cache_error:
             # Cache building failed - not fatal, will fall back to individual API queries
+            cache_elapsed = time.time() - cache_start
             print(f"[!] Warning: Failed to build SharePoint cache: {cache_error}")
-            print("[!] Falling back to individual API queries (slower but still functional)")
+            print(f"[!] Falling back to individual API queries (slower but still functional) ({cache_elapsed:.3f}s)")
             sharepoint_cache = None
 
     # ============================================================

@@ -69,6 +69,11 @@ class ParallelUploader:
         # Thread-safe set for converted markdown files
         self.converted_md_files = ThreadSafeSet()
 
+        # Thread-safe list for files with Mermaid diagram failures
+        # Each item: (relative_path, num_failed, num_total)
+        self.mermaid_failed_files = []
+        self.mermaid_failed_files_lock = __import__('threading').Lock()
+
         # Queue for batch metadata updates
         self.metadata_queue = BatchQueue(batch_size=20) if self.batch_metadata else None
 
@@ -110,7 +115,8 @@ class ParallelUploader:
 
         # Process markdown files first (may need conversion)
         if md_files:
-            print(f"[*] Processing markdown files...")
+            md_start_time = time.time()
+            print(f"[*] Processing markdown files:")
             if is_debug_enabled():
                 print(f"[DEBUG] Converting {len(md_files)} markdown files in parallel...")
 
@@ -119,13 +125,43 @@ class ParallelUploader:
                 filehash_available, library_name
             )
 
-            # Show summary after markdown processing
+            # Show detailed summary after markdown processing
+            md_no_changes = self.stats_wrapper.stats.get('md_no_changes', 0)
+            md_converted = self.stats_wrapper.stats.get('md_converted', 0)
+            md_failed = self.stats_wrapper.stats.get('md_conversion_failed', 0)
+            mermaid_rendered = self.stats_wrapper.stats.get('mermaid_diagrams_rendered', 0)
+            mermaid_failed = self.stats_wrapper.stats.get('mermaid_diagrams_failed', 0)
+            total_md = len(md_files)
+
+            print(f"   - No Changes Detected:        {md_no_changes:>4}/{total_md}")
+            print(f"   - Converted to HTML:          {md_converted:>4}/{total_md}")
+            if md_failed > 0:
+                print(f"   - Conversion Failed:          {md_failed:>4}")
+
+            # Show Mermaid diagram statistics if any diagrams were processed
+            if mermaid_rendered > 0 or mermaid_failed > 0:
+                total_mermaid = mermaid_rendered + mermaid_failed
+                print(f"   - Mermaid Diagrams Rendered:  {mermaid_rendered:>4}/{total_mermaid}")
+                if mermaid_failed > 0:
+                    print(f"   - Mermaid Diagrams Failed:    {mermaid_failed:>4}/{total_mermaid}")
+
+                    # Display list of files with Mermaid failures
+                    if self.mermaid_failed_files:
+                        print(f"\n   Files with Mermaid diagram failures:")
+                        for file_path, num_failed, num_total in sorted(self.mermaid_failed_files):
+                            print(f"      - {file_path} ({num_failed}/{num_total} diagrams failed)")
+
+            md_elapsed = time.time() - md_start_time
             converted_count = len([f for f in md_files if f in self.converted_md_files])
             if converted_count > 0:
-                print(f"[✓] Verified or converted {converted_count} markdown files")
+                print(f"\n[✓] Verified or converted {converted_count} markdown files ({md_elapsed:.3f}s)")
 
         # Process regular files in parallel
+        upload_start_time = time.time()
         if regular_files:
+            # Check if any files actually need uploading (not just skipped)
+            files_before = self.stats_wrapper.stats.get('new_files', 0) + self.stats_wrapper.stats.get('replaced_files', 0)
+
             print(f"\n[*] Uploading files...")
             if is_debug_enabled():
                 print(f"[DEBUG] Uploading {len(regular_files)} files in parallel (workers: {self.max_workers})...")
@@ -134,6 +170,18 @@ class ParallelUploader:
                 regular_files, site_id, drive_id, root_item_id, base_path, config,
                 filehash_available, library_name
             )
+
+            upload_elapsed = time.time() - upload_start_time
+            files_after = self.stats_wrapper.stats.get('new_files', 0) + self.stats_wrapper.stats.get('replaced_files', 0)
+            files_uploaded = files_after - files_before
+
+            if files_uploaded == 0:
+                print(f"\n[✓] No file changes detected ({upload_elapsed:.3f}s)")
+            else:
+                print(f"\n[✓] Uploaded {files_uploaded} files ({upload_elapsed:.3f}s)")
+        else:
+            upload_elapsed = time.time() - upload_start_time
+            print(f"\n[✓] No files to upload ({upload_elapsed:.3f}s)")
 
         # Process any remaining batch metadata updates
         if self.metadata_queue:
@@ -419,6 +467,7 @@ class ParallelUploader:
                     # File exists and source .md hash matches - SKIP conversion entirely!
                     if is_debug_enabled():
                         print(f"[=] Skipping markdown conversion - source unchanged: {sanitized_rel_path}")
+                    self.stats_wrapper.increment('md_no_changes')
                     return True  # Success - no work needed
 
             # File needs update or doesn't exist - proceed with conversion
@@ -443,12 +492,25 @@ class ParallelUploader:
             sharepoint_base_url = f"https://{config.sharepoint_host_name}/sites/{config.site_name}/Shared%20Documents/{config.upload_path}"
 
             # Convert to HTML with link rewriting
-            html_content = convert_markdown_to_html(
+            html_content, mermaid_success, mermaid_failed = convert_markdown_to_html(
                 md_content,
                 file_path,
                 sharepoint_base_url=sharepoint_base_url,
                 current_file_rel_path=rel_path_str
             )
+
+            # Track Mermaid diagram statistics
+            if mermaid_success > 0:
+                for _ in range(mermaid_success):
+                    self.stats_wrapper.increment('mermaid_diagrams_rendered')
+            if mermaid_failed > 0:
+                for _ in range(mermaid_failed):
+                    self.stats_wrapper.increment('mermaid_diagrams_failed')
+
+                # Track which file had failures for detailed reporting
+                total_mermaid = mermaid_success + mermaid_failed
+                with self.mermaid_failed_files_lock:
+                    self.mermaid_failed_files.append((sanitized_rel_path, mermaid_failed, total_mermaid))
 
             # Create temp HTML file
             temp_html_fd, html_path = tempfile.mkstemp(suffix='.html', prefix='converted_md_')
@@ -491,10 +553,12 @@ class ParallelUploader:
             if os.path.exists(html_path):
                 os.remove(html_path)
 
+            self.stats_wrapper.increment('md_converted')
             return True
 
         except Exception as e:
             print(f"[Error] Failed to convert markdown file {file_path}: {e}")
+            self.stats_wrapper.increment('md_conversion_failed')
             # Fall back to uploading raw markdown
             try:
                 upload_file_with_structure(

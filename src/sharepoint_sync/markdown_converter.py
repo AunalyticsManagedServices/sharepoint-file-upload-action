@@ -341,15 +341,21 @@ def convert_markdown_to_html(md_content, filename, sharepoint_base_url=None, cur
         current_file_rel_path (str, optional): Current file's relative path
 
     Returns:
-        str: Complete HTML document with embedded styles and SVGs
+        tuple: (html_content: str, mermaid_success: int, mermaid_failed: int)
+               - html_content: Complete HTML document with embedded styles and SVGs
+               - mermaid_success: Number of Mermaid diagrams successfully converted to SVG
+               - mermaid_failed: Number of Mermaid diagrams that failed (shown as code blocks)
     """
     # Rewrite internal markdown links before conversion
     md_content = rewrite_markdown_links(md_content, sharepoint_base_url, current_file_rel_path)
     # First, extract and convert all mermaid blocks to placeholder SVGs
     mermaid_pattern = r'```mermaid\n(.*?)\n```'
     mermaid_blocks = []
+    mermaid_success_count = 0
+    mermaid_failed_count = 0
 
     def replace_mermaid_with_placeholder(match):
+        nonlocal mermaid_success_count, mermaid_failed_count
         mermaid_code = match.group(1)
         placeholder = f"<!--MERMAID_PLACEHOLDER_{len(mermaid_blocks)}-->"
 
@@ -361,9 +367,11 @@ def convert_markdown_to_html(md_content, filename, sharepoint_base_url=None, cur
             svg_content = re.sub(r'<\?xml[^>]*\?>', '', svg_content)
             svg_content = svg_content.strip()
             mermaid_blocks.append(svg_content)
+            mermaid_success_count += 1
         else:
             # If conversion failed, keep as code block
             mermaid_blocks.append(f'<pre><code>mermaid\n{mermaid_code}</code></pre>')
+            mermaid_failed_count += 1
 
         return placeholder
 
@@ -564,7 +572,7 @@ def convert_markdown_to_html(md_content, filename, sharepoint_base_url=None, cur
 </body>
 </html>'''
 
-    return html_template
+    return html_template, mermaid_success_count, mermaid_failed_count
 
 
 def convert_markdown_files_parallel(md_file_paths, max_workers=4):
@@ -613,12 +621,13 @@ def convert_markdown_files_parallel(md_file_paths, max_workers=4):
                 md_content = f.read()
 
             # Convert to HTML
-            html_content = convert_markdown_to_html(
+            html_content, mermaid_success, mermaid_failed = convert_markdown_to_html(
                 md_content,
                 md_path
             )
 
-            return True, html_content
+            # Return HTML content along with Mermaid statistics
+            return True, (html_content, mermaid_success, mermaid_failed)
 
         except Exception as e:
             error_msg = f"Conversion failed: {str(e)[:200]}"
@@ -679,7 +688,7 @@ def convert_markdown_to_html_tempfile(md_path, output_dir=None):
             md_content = f.read()
 
         # Convert to HTML
-        html_content = convert_markdown_to_html(
+        html_content, mermaid_success, mermaid_failed = convert_markdown_to_html(
             md_content,
             md_path
         )
