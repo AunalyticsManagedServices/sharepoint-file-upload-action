@@ -457,7 +457,8 @@ class ParallelUploader:
 
             # EARLY CHECK: Does .html file already exist with matching source .md hash?
             # This avoids expensive markdown conversion if source hasn't changed
-            if not config.force_upload and filehash_available:
+            # Skip this check if force_md_to_html_regeneration is enabled
+            if not config.force_upload and not config.force_md_to_html_regeneration and filehash_available:
                 if is_debug_enabled():
                     print(f"[?] Checking if converted .html file needs update: {sanitized_rel_path}")
 
@@ -538,10 +539,12 @@ class ParallelUploader:
 
             # Upload HTML file with source .md file hash
             # This allows hash-based comparison instead of size-only (solves Mermaid SVG ID variation issue)
+            # Force upload if force_md_to_html_regeneration is true (always upload newly regenerated HTML)
+            force_html_upload = config.force_upload or config.force_md_to_html_regeneration
             for i in range(config.max_retry):
                 try:
                     upload_file(
-                        site_id, drive_id, target_folder_id, html_path, 4*1024*1024, config.force_upload,
+                        site_id, drive_id, target_folder_id, html_path, 4*1024*1024, force_html_upload,
                         config.tenant_url, library_name, filehash_available,
                         config.tenant_id, config.client_id, config.client_secret,
                         config.login_endpoint, config.graph_endpoint,

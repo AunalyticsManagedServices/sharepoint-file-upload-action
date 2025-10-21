@@ -47,6 +47,10 @@ inputs:
     description: 'Convert Markdown files to HTML with Mermaid diagrams as SVG (best for SharePoint viewing)'
     required: false
     default: "true"
+  force_md_to_html_regeneration:
+    description: 'Force regeneration of HTML from .md files even if source unchanged (requires convert_md_to_html=true)'
+    required: false
+    default: "false"
   exclude_patterns:
     description: 'Comma-separated list of exclusion patterns (e.g., "*.pyc,__pycache__,*.log")'
     required: false
@@ -93,6 +97,7 @@ runs:
     - ${{ inputs.file_path_recursive_match }}
     - ${{ inputs.force_upload }}
     - ${{ inputs.convert_md_to_html }}
+    - ${{ inputs.force_md_to_html_regeneration }}
     - ${{ inputs.exclude_patterns }}
     - ${{ inputs.sync_delete }}
     - ${{ inputs.sync_delete_whatif }}

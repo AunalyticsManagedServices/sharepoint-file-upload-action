@@ -29,12 +29,13 @@ class Config:
         11. recursive (optional) - Enable recursive glob (default: False)
         12. force_upload (optional) - Force upload all files (default: False)
         13. convert_md_to_html (optional) - Convert markdown to HTML (default: True)
-        14. exclude_patterns (optional) - Comma-separated exclusion patterns (default: "")
-        15. sync_delete (optional) - Delete SharePoint files not in sync set (default: False)
-        16. sync_delete_whatif (optional) - Preview deletions without actually deleting (default: True)
-        17. max_upload_workers (optional) - Max concurrent uploads (default: 4, respects Graph API limits)
-        18. debug (optional) - Enable general debug output (default: False)
-        19. debug_metadata (optional) - Enable metadata-specific debug output (default: False)
+        14. force_md_to_html_regeneration (optional) - Force regenerate HTML from .md even if unchanged (default: False)
+        15. exclude_patterns (optional) - Comma-separated exclusion patterns (default: "")
+        16. sync_delete (optional) - Delete SharePoint files not in sync set (default: False)
+        17. sync_delete_whatif (optional) - Preview deletions without actually deleting (default: True)
+        18. max_upload_workers (optional) - Max concurrent uploads (default: 4, respects Graph API limits)
+        19. debug (optional) - Enable general debug output (default: False)
+        20. debug_metadata (optional) - Enable metadata-specific debug output (default: False)
         """
         # Required arguments
         self.site_name = sys.argv[1]
@@ -52,9 +53,10 @@ class Config:
         self.recursive = (sys.argv[11] if len(sys.argv) > 11 else "false").lower() == "true"
         self.force_upload = (sys.argv[12] if len(sys.argv) > 12 else "false").lower() == "true"
         self.convert_md_to_html = (sys.argv[13] if len(sys.argv) > 13 else "true").lower() == "true"
-        self.exclude_patterns = sys.argv[14] if len(sys.argv) > 14 and sys.argv[14] else ""
-        self.sync_delete = (sys.argv[15] if len(sys.argv) > 15 else "false").lower() == "true"
-        self.sync_delete_whatif = (sys.argv[16] if len(sys.argv) > 16 else "true").lower() == "true"
+        self.force_md_to_html_regeneration = (sys.argv[14] if len(sys.argv) > 14 else "false").lower() == "true"
+        self.exclude_patterns = sys.argv[15] if len(sys.argv) > 15 and sys.argv[15] else ""
+        self.sync_delete = (sys.argv[16] if len(sys.argv) > 16 else "false").lower() == "true"
+        self.sync_delete_whatif = (sys.argv[17] if len(sys.argv) > 17 else "true").lower() == "true"
 
         # Parallel processing configuration (auto-detect optimal values)
         import os as os_module
@@ -65,8 +67,8 @@ class Config:
         # WARNING: Starting September 30, 2025, Microsoft will reduce per-app/per-user
         # throttling limits to HALF the total per-tenant limit. Monitor for increased
         # 429 responses after this date. Default of 4 workers should remain safe.
-        if len(sys.argv) > 17 and sys.argv[17]:
-            self.max_upload_workers = min(int(sys.argv[17]), 10)
+        if len(sys.argv) > 18 and sys.argv[18]:
+            self.max_upload_workers = min(int(sys.argv[18]), 10)
         else:
             self.max_upload_workers = 4  # Safe default for Graph API
 
@@ -75,8 +77,8 @@ class Config:
         self.max_markdown_workers = min(4, cpu_count)
 
         # Debug flags
-        self.debug = (sys.argv[18] if len(sys.argv) > 18 else "false").lower() == "true"
-        self.debug_metadata = (sys.argv[19] if len(sys.argv) > 19 else "false").lower() == "true"
+        self.debug = (sys.argv[19] if len(sys.argv) > 19 else "false").lower() == "true"
+        self.debug_metadata = (sys.argv[20] if len(sys.argv) > 20 else "false").lower() == "true"
 
         # Derived values
         self.tenant_url = f'https://{self.sharepoint_host_name}/sites/{self.site_name}'

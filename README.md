@@ -178,6 +178,7 @@ Examples:
 | `max_retries` | `3` | Upload retry attempts (1-10) |
 | `force_upload` | `false` | Skip change detection, upload all files |
 | `convert_md_to_html` | `true` | Convert Markdown to HTML |
+| `force_md_to_html_regeneration` | `false` | Force regenerate HTML from .md files (Mermaid/font changes) |
 | `exclude_patterns` | `""` | Comma-separated exclusion patterns |
 | `sync_delete` | `false` | Delete SharePoint files not in repository |
 | `sync_delete_whatif` | `true` | Preview deletions without deleting |
@@ -237,6 +238,40 @@ max_retries: 1    # Fail fast
 ```yaml
 convert_md_to_html: true   # README.md → README.html (styled with links rewritten)
 convert_md_to_html: false  # README.md → README.md (as-is)
+```
+
+#### `force_md_to_html_regeneration` - Force HTML regeneration
+
+- **Default**: `false` (smart sync - only convert changed .md files)
+- **Requires**: `convert_md_to_html: true`
+- **Use `true` when**:
+  - Updated Mermaid diagram configuration
+  - Changed Docker font packages
+  - Modified Puppeteer settings
+  - Need to rebuild all HTML without changing source .md files
+
+**Behavior**:
+- ✅ **Forces regeneration**: All `.md` files → `.html` (bypasses hash comparison)
+- ✅ **Forces upload**: All regenerated `.html` files uploaded to SharePoint
+- ✅ **Smart sync preserved**: Regular files (PDFs, images, etc.) still use smart sync
+- ❌ **Does NOT affect**: Non-markdown files
+
+**Difference from `force_upload`**:
+
+| Setting | Markdown Files | Regular Files |
+|---------|---------------|---------------|
+| `force_upload: true` | ✅ Force convert & upload | ✅ Force upload |
+| `force_md_to_html_regeneration: true` | ✅ Force convert & upload | ⚡ Smart sync (unchanged) |
+
+💡 **Use Case**: After updating Mermaid config or Docker fonts, rebuild all documentation HTML without wasting bandwidth re-uploading unchanged binary files.
+
+```yaml
+# Rebuild all markdown HTML after Mermaid config changes
+convert_md_to_html: true
+force_md_to_html_regeneration: true   # Only affects .md → .html conversion
+
+# Force EVERYTHING to upload (markdown + all other files)
+force_upload: true
 ```
 
 #### `exclude_patterns` - File exclusions
@@ -668,6 +703,50 @@ jobs:
 ```
 
 **Performance:** 2,500 files processed in ~2 minutes (vs ~15 minutes without caching)
+
+### Example 7: Force Markdown HTML Regeneration (Mermaid/Font Changes)
+
+```yaml
+- name: Checkout Repository
+  uses: actions/checkout@v4
+
+- name: Rebuild All Markdown HTML
+  uses: AunalyticsManagedServices/sharepoint-file-upload-action@v4
+  with:
+    file_path: "**/*.md"
+    file_path_recursive_match: true
+    convert_md_to_html: true
+    force_md_to_html_regeneration: true  # Force regenerate ALL HTML
+    host_name: "company.sharepoint.com"
+    site_name: "Documentation"
+    upload_path: "Shared Documents/Docs"
+    tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
+    client_id: ${{ secrets.SHAREPOINT_CLIENT_ID }}
+    client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
+```
+
+**Use Cases:**
+- ✅ Updated Mermaid diagram configuration (`mermaid-config.json`)
+- ✅ Changed Docker font packages for better diagram rendering
+- ✅ Modified Puppeteer settings (`puppeteer-config.json`)
+- ✅ Need to rebuild all documentation HTML without touching source `.md` files
+
+**What It Does:**
+- ✅ **All .md files**: Regenerated as HTML and uploaded (bypasses hash check)
+- ✅ **Regular files**: Smart sync preserved (only uploads if changed)
+- ⚡ **Result**: Rebuilt documentation without wasting bandwidth on unchanged binaries
+
+**Difference from `force_upload`:**
+
+```yaml
+# Option 1: Rebuild ONLY markdown HTML (efficient)
+force_md_to_html_regeneration: true  # 50 MB markdown HTML regenerated
+                                      # 500 MB images/PDFs use smart sync
+
+# Option 2: Force upload EVERYTHING (wasteful)
+force_upload: true                    # 550 MB total re-uploaded
+                                      # Images/PDFs re-uploaded unnecessarily
+```
 
 ## 🔧 Advanced Features
 
