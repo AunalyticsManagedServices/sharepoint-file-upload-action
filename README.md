@@ -3,7 +3,7 @@
 > 🚀 Automatically sync files from GitHub to SharePoint with intelligent change detection and Markdown-to-HTML conversion
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/Version-5.0.0-blue)](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action)
+[![Version](https://img.shields.io/badge/Version-5.1.0-blue)](https://github.com/AunalyticsManagedServices/sharepoint-file-upload-action)
 
 ## 📋 Quick Navigation
 
@@ -33,7 +33,7 @@ Seamlessly synchronize files from your GitHub repository to SharePoint document 
 
 | Feature | Description |
 |---------|-------------|
-| **Smart Sync** | xxHash128 content comparison + upfront metadata caching (80-90% fewer API calls, 4-6x faster) |
+| **Smart Sync** | xxHash128 content comparison + upfront file & folder caching (80-95% fewer API calls, 4-6x faster) |
 | **FileHash Backfill** | Automatically populates empty hashes without re-uploading files |
 | **Markdown → HTML** | GitHub-flavored HTML with embedded Mermaid diagrams and rewritten links |
 | **Large Files** | Chunked upload for files >4MB with automatic retry logic |
@@ -637,6 +637,7 @@ jobs:
 
 [CACHE] SharePoint Metadata Cache:
    - Total files cached:          2,500
+   - Total folders cached:          150
    - Files with FileHash:       2,400/2,500
    - Files with list_item_id:   2,500/2,500
 
@@ -808,6 +809,7 @@ The action uses **xxHash128** for lightning-fast change detection:
 
 [CACHE] SharePoint Metadata Cache:
    - Total files cached:            953
+   - Total folders cached:          23
    - Files with FileHash:           682/953
    - Files with list_item_id:       953/953
 
@@ -1236,36 +1238,38 @@ Reserved names (CON, PRN, AUX, NUL, etc.) are prefixed with underscore.
 
 ### How It Works
 
-The action automatically builds a comprehensive cache of all SharePoint file metadata in a single bulk operation, eliminating 80-90% of API calls.
+The action automatically builds a comprehensive cache of all SharePoint file AND folder metadata in a single bulk operation, eliminating 80-95% of API calls.
 
 **Traditional Approach:**
 ```
-For each of 100 files:
-  - Query SharePoint for metadata (1 API call per file)
+For each of 100 files (in 10 folders):
+  - Check if folder exists (1 API call per folder) = 10 calls
+  - Query SharePoint for file metadata (1 API call per file) = 100 calls
   - Compare with local file
   - Upload if changed
 
-Total: 100+ API calls
+Total: 110+ API calls
 ```
 
 **Optimized Approach:**
 ```
-1. Build cache: Query all files once (10-20 API calls)
-2. For each of 100 files:
-   - Lookup metadata from cache (instant, 0 API calls)
+1. Build cache: Query all files and folders once (10-20 API calls)
+2. For each of 100 files (in 10 folders):
+   - Lookup folder from cache (instant, 0 API calls)
+   - Lookup file metadata from cache (instant, 0 API calls)
    - Compare with local file
    - Upload if changed
 
-Total: 10-20 API calls (80-90% reduction)
+Total: 10-20 API calls (80-95% reduction)
 ```
 
 ### Performance Gains
 
 | Repository Size | API Calls (Old) | API Calls (New) | Time Saved | Speedup |
 |----------------|-----------------|-----------------|------------|---------|
-| 100 files | 110 calls | 20 calls | ~20 seconds | 4-6x faster |
-| 500 files | 550 calls | 50 calls | ~2 minutes | 5-7x faster |
-| 1000 files | 1100 calls | 100 calls | ~4 minutes | 6-10x faster |
+| 100 files (10 folders) | 110 calls | 20 calls | ~25 seconds | 4-6x faster |
+| 500 files (25 folders) | 550 calls | 50 calls | ~2.5 minutes | 5-7x faster |
+| 1000 files (50 folders) | 1100 calls | 100 calls | ~5 minutes | 6-10x faster |
 
 ### When Caching is Used
 
@@ -1286,14 +1290,16 @@ When cache is built successfully:
 
 [CACHE] SharePoint Metadata Cache:
    - Total files cached:            456
+   - Total folders cached:          18
    - Files with FileHash:           398/456
    - Files with list_item_id:       456/456
 ```
 
 During file processing (when debug enabled):
 ```
-[CACHE HIT] Found docs/README.html in cache
-[=] File unchanged (cached hash match): docs/README.html
+[CACHE HIT] Folder found in cache: docs/2024
+[CACHE HIT] Found docs/2024/README.html in cache
+[=] File unchanged (cached hash match): docs/2024/README.html
 ```
 
 ### Technical Details
@@ -1304,10 +1310,8 @@ GET /drives/{drive-id}/items/{folder-id}/children?$expand=listItem($expand=field
 ```
 
 **What's Cached:**
-- Drive item metadata (id, name, size)
-- List item ID (for metadata updates)
-- FileHash column values
-- File size for comparison
+- **Files:** Drive item metadata (id, name, size), List item ID, FileHash column values
+- **Folders:** Drive item IDs and folder names for instant folder existence checks
 
 **Benefits:**
 - Dramatically faster sync operations

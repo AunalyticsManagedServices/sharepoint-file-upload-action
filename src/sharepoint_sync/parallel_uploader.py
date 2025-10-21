@@ -98,7 +98,15 @@ class ParallelUploader:
             int: Number of failed uploads
         """
         # Store cache for workers to access
-        self.sharepoint_cache = sharepoint_cache
+        # Extract files cache from new structure if present
+        if isinstance(sharepoint_cache, dict) and 'files' in sharepoint_cache:
+            # New structure: {'files': {...}, 'folders': {...}}
+            self.sharepoint_cache = sharepoint_cache['files']
+            self.folder_cache = sharepoint_cache.get('folders')
+        else:
+            # Old structure: direct dict of files
+            self.sharepoint_cache = sharepoint_cache
+            self.folder_cache = None
 
         # Separate markdown files from regular files
         md_files = []
@@ -439,16 +447,12 @@ class ParallelUploader:
             if dir_path and dir_path != "." and dir_path != "":
                 from .uploader import ensure_folder_exists
 
-                # Extract folder cache from sharepoint_cache if available
-                folder_cache = None
-                if isinstance(self.sharepoint_cache, dict) and 'folders' in self.sharepoint_cache:
-                    folder_cache = self.sharepoint_cache.get('folders')
-
+                # Use stored folder cache (already extracted in process_files)
                 target_folder_id = ensure_folder_exists(
                     site_id, drive_id, root_item_id, dir_path,
                     config.tenant_id, config.client_id, config.client_secret,
                     config.login_endpoint, config.graph_endpoint,
-                    folder_cache=folder_cache
+                    folder_cache=self.folder_cache
                 )
 
             # EARLY CHECK: Does .html file already exist with matching source .md hash?
