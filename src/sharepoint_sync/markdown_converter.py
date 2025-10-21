@@ -338,7 +338,8 @@ def rewrite_markdown_links(md_content, sharepoint_base_url=None, current_file_re
     Args:
         md_content (str): Markdown content with links
         sharepoint_base_url (str): Base SharePoint URL (e.g.,
-            'https://aunalytics.sharepoint.com/sites/SiteName/Shared%20Documents/Folder/Path')
+            'https://aunalytics.sharepoint.com/sites/SiteName/Shared%20Documents/Folder%20Path')
+            NOTE: Should be pre-encoded (spaces → %20, etc.)
         current_file_rel_path (str): Current file's relative path from upload root
             (e.g., 'Adobe/AcrobatDC/Update/README.md')
 
@@ -351,6 +352,25 @@ def rewrite_markdown_links(md_content, sharepoint_base_url=None, current_file_re
 
     import posixpath
     from urllib.parse import quote
+
+    # Define file extensions that can be viewed in SharePoint web browser
+    WEB_VIEWABLE_EXTENSIONS = {
+        '.html', '.htm',           # HTML files (with ?web=1)
+        '.pdf',                    # PDF files (native viewer)
+        '.docx', '.doc',          # Word documents (Office Online)
+        '.xlsx', '.xls',          # Excel spreadsheets (Office Online)
+        '.pptx', '.ppt',          # PowerPoint presentations (Office Online)
+        '.txt',                   # Text files (preview)
+        '.md',                    # Markdown (converted to .html by our action)
+        '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg',  # Images (preview)
+        '.mp4', '.mov', '.avi',   # Videos (player)
+        '.mp3', '.wav',           # Audio (player)
+        '.ps1', '.py', '.sh', '.bat', '.cmd',  # Script files (code preview)
+        '.json', '.xml', '.yaml', '.yml',      # Config files (preview)
+        '.csv', '.tsv',           # Data files (preview)
+        '.log',                   # Log files (preview)
+        '.cs', '.js', '.ts', '.java', '.cpp', '.c', '.h',  # Source code (preview)
+    }
 
     # Get current file's directory
     current_dir = posixpath.dirname(current_file_rel_path)
@@ -404,19 +424,44 @@ def rewrite_markdown_links(md_content, sharepoint_base_url=None, current_file_re
         if is_folder and resolved_path.endswith('/'):
             resolved_path = resolved_path.rstrip('/')
 
+        # Determine if file can be viewed in browser
+        file_ext = posixpath.splitext(resolved_path)[1].lower()
+        is_web_viewable = file_ext in WEB_VIEWABLE_EXTENSIONS
+
+        # For non-web-viewable files, link to the containing folder instead
+        if not is_folder and not is_web_viewable:
+            # Get parent folder path
+            folder_path = posixpath.dirname(resolved_path)
+            if folder_path:
+                # Link to folder containing the file
+                # URL encode the path components but preserve slashes
+                path_parts = folder_path.split('/')
+                encoded_parts = [quote(part) for part in path_parts]
+                encoded_path = '/'.join(encoded_parts)
+
+                # Folder view URL (SharePoint will show the folder contents)
+                full_url = f"{sharepoint_base_url}/{encoded_path}"
+
+                # Return rewritten markdown link with note about folder location
+                return f'[{link_text}]({full_url} "{resolved_path.split("/")[-1]} - Click to view folder")'
+            else:
+                # File is in root - link to base URL
+                return f'[{link_text}]({sharepoint_base_url} "{resolved_path} - Click to view folder")'
+
         # URL encode the path components but preserve slashes
         path_parts = resolved_path.split('/')
         encoded_parts = [quote(part) for part in path_parts]
         encoded_path = '/'.join(encoded_parts)
 
         # Construct full SharePoint URL
-        # For folders, SharePoint uses Forms/AllItems.aspx view
         if is_folder:
-            # Folder link format
+            # Folder link format (opens folder view)
             full_url = f"{sharepoint_base_url}/{encoded_path}"
         else:
-            # File link format
-            full_url = f"{sharepoint_base_url}/{encoded_path}{anchor}"
+            # File link format (web-viewable files)
+            # Add ?web=1 to open in browser preview instead of downloading
+            # This works for HTML, scripts, code files, text files, etc.
+            full_url = f"{sharepoint_base_url}/{encoded_path}?web=1{anchor}"
 
         # Return rewritten markdown link
         return f'[{link_text}]({full_url})'

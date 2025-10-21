@@ -231,8 +231,16 @@ class ParallelUploader:
             # Normalize path separators
             rel_path_str = rel_path_str.replace('\\', '/')
 
-            # Construct SharePoint base URL
-            sharepoint_base_url = f"https://{config.sharepoint_host_name}/sites/{config.site_name}/Shared%20Documents/{config.upload_path}"
+            # Construct SharePoint base URL with proper encoding
+            # Format: https://host/sites/sitename/Shared Documents/upload_path
+            from urllib.parse import quote
+            # Build full path: "Shared Documents" + "/" + upload_path
+            full_library_path = f"Shared Documents/{config.upload_path}" if config.upload_path else "Shared Documents"
+            # Encode each path component separately (preserves slashes)
+            path_parts = full_library_path.split('/')
+            encoded_parts = [quote(part) for part in path_parts]
+            encoded_library_path = '/'.join(encoded_parts)
+            sharepoint_base_url = f"https://{config.sharepoint_host_name}/sites/{config.site_name}/{encoded_library_path}"
 
             # Rewrite internal links
             rewritten_content = rewrite_markdown_links(md_content, sharepoint_base_url, rel_path_str)
@@ -499,9 +507,16 @@ class ParallelUploader:
             # Normalize path separators to forward slashes
             rel_path_str = rel_path_str.replace('\\', '/')
 
-            # Construct SharePoint base URL for link rewriting
+            # Construct SharePoint base URL for link rewriting with proper encoding
             # Format: https://host/sites/sitename/Shared Documents/upload_path
-            sharepoint_base_url = f"https://{config.sharepoint_host_name}/sites/{config.site_name}/Shared%20Documents/{config.upload_path}"
+            from urllib.parse import quote
+            # Build full path: "Shared Documents" + "/" + upload_path
+            full_library_path = f"Shared Documents/{config.upload_path}" if config.upload_path else "Shared Documents"
+            # Encode each path component separately (preserves slashes)
+            path_parts = full_library_path.split('/')
+            encoded_parts = [quote(part) for part in path_parts]
+            encoded_library_path = '/'.join(encoded_parts)
+            sharepoint_base_url = f"https://{config.sharepoint_host_name}/sites/{config.site_name}/{encoded_library_path}"
 
             # Convert to HTML with link rewriting
             html_content, mermaid_success, mermaid_failed = convert_markdown_to_html(
