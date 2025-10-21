@@ -452,7 +452,8 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                         print(f"[*] File changed (cached size mismatch): {display_path}")
                     return True, True, None, local_hash
         else:
-            # Cache miss - file doesn't exist in SharePoint yet
+            # Cache miss - file not found in cache
+            # Fall through to API query to verify file status (safer than assuming new)
             if upload_stats_dict:
                 if hasattr(upload_stats_dict, 'increment'):
                     upload_stats_dict.increment('cache_misses')
@@ -460,11 +461,11 @@ def check_file_needs_update(local_path, file_name, site_url, list_name, filehash
                     upload_stats_dict['cache_misses'] = upload_stats_dict.get('cache_misses', 0) + 1
 
             if is_debug_enabled():
-                print(f"[CACHE MISS] {display_path} not found in cache (new file)")
-            return True, False, None, local_hash
+                print(f"[CACHE MISS] {display_path} not found in cache - verifying with API query")
+            # Don't return - fall through to API query below for safety
 
     # ============================================================================
-    # FALLBACK: Individual API query (when cache not available)
+    # FALLBACK: Individual API query (cache miss or cache not available)
     # ============================================================================
     # Track API query (fallback when cache not available)
     if upload_stats_dict:
