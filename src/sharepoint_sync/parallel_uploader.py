@@ -126,11 +126,11 @@ class ParallelUploader:
             )
 
             # Show detailed summary after markdown processing
-            md_no_changes = self.stats_wrapper.stats.get('md_no_changes', 0)
-            md_converted = self.stats_wrapper.stats.get('md_converted', 0)
-            md_failed = self.stats_wrapper.stats.get('md_conversion_failed', 0)
-            mermaid_rendered = self.stats_wrapper.stats.get('mermaid_diagrams_rendered', 0)
-            mermaid_failed = self.stats_wrapper.stats.get('mermaid_diagrams_failed', 0)
+            md_no_changes = self.stats_wrapper.get('md_no_changes', 0)
+            md_converted = self.stats_wrapper.get('md_converted', 0)
+            md_failed = self.stats_wrapper.get('md_conversion_failed', 0)
+            mermaid_rendered = self.stats_wrapper.get('mermaid_diagrams_rendered', 0)
+            mermaid_failed = self.stats_wrapper.get('mermaid_diagrams_failed', 0)
             total_md = len(md_files)
 
             print(f"   - No Changes Detected:        {md_no_changes:>4}/{total_md}")
@@ -160,7 +160,7 @@ class ParallelUploader:
         upload_start_time = time.time()
         if regular_files:
             # Check if any files actually need uploading (not just skipped)
-            files_before = self.stats_wrapper.stats.get('new_files', 0) + self.stats_wrapper.stats.get('replaced_files', 0)
+            files_before = self.stats_wrapper.get('new_files', 0) + self.stats_wrapper.get('replaced_files', 0)
 
             print(f"\n[*] Uploading files...")
             if is_debug_enabled():
@@ -172,7 +172,7 @@ class ParallelUploader:
             )
 
             upload_elapsed = time.time() - upload_start_time
-            files_after = self.stats_wrapper.stats.get('new_files', 0) + self.stats_wrapper.stats.get('replaced_files', 0)
+            files_after = self.stats_wrapper.get('new_files', 0) + self.stats_wrapper.get('replaced_files', 0)
             files_uploaded = files_after - files_before
 
             if files_uploaded == 0:
