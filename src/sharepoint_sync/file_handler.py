@@ -182,9 +182,106 @@ def calculate_file_hash(file_path):
                 hasher.update(chunk)
 
         return hasher.hexdigest()
-    except Exception as e:
+
+    except FileNotFoundError:
+        # File was deleted or moved during sync
+        print(f"[!] ========================================")
+        print(f"[!] FILE NOT FOUND")
+        print(f"[!] ========================================")
+        print(f"[!] File: {file_path}")
+        print(f"[!] ")
+        print(f"[!] File may have been deleted or moved during sync operation.")
+        print(f"[!] ")
+        print(f"[!] Troubleshooting:")
+        print(f"[!]   - Verify file exists before running sync")
+        print(f"[!]   - Check if file was moved by another process")
+        print(f"[!]   - Exclude this file if it's temporary or auto-generated")
+        print(f"[!] ========================================")
+        return None
+
+    except PermissionError:
+        # Cannot read file due to permissions
+        print(f"[!] ========================================")
+        print(f"[!] PERMISSION DENIED")
+        print(f"[!] ========================================")
+        print(f"[!] File: {file_path}")
+        print(f"[!] ")
+        print(f"[!] Cannot read file - permission denied.")
+        print(f"[!] ")
+        print(f"[!] Troubleshooting:")
+        print(f"[!]   1. Verify file permissions allow reading")
+        print(f"[!]   2. Check if file is locked by another process")
+        print(f"[!]   3. On Windows, check if file is opened exclusively by another app")
+        print(f"[!]   4. Run with appropriate permissions if needed")
+        print(f"[!]   5. Consider excluding this file from sync")
+        print(f"[!] ========================================")
+        return None
+
+    except OSError as e:
+        # I/O errors (disk issues, network drive problems, etc.)
+        print(f"[!] ========================================")
+        print(f"[!] FILE I/O ERROR")
+        print(f"[!] ========================================")
+        print(f"[!] File: {file_path}")
+        print(f"[!] ")
+        print(f"[!] Could not read file due to I/O error.")
+        print(f"[!] ")
+        print(f"[!] Troubleshooting:")
+        print(f"[!]   1. Check disk health if errors persist (run: chkdsk on Windows, fsck on Linux)")
+        print(f"[!]   2. Verify network drive connectivity if file is on network share")
+        print(f"[!]   3. Check available disk space (may be full)")
+        print(f"[!]   4. Verify filesystem is not corrupted")
+        print(f"[!] ")
+        print(f"[!] Technical details: {str(e)[:200]}")
+        print(f"[!] ========================================")
+        return None
+
+    except MemoryError:
+        # Out of memory - file may be extremely large
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if os.path.exists(file_path) else 0
+        print(f"[!] ========================================")
+        print(f"[!] OUT OF MEMORY")
+        print(f"[!] ========================================")
+        print(f"[!] File: {file_path}")
+        print(f"[!] File size: {file_size_mb:.2f} MB")
+        print(f"[!] ")
+        print(f"[!] Ran out of memory while calculating hash.")
+        print(f"[!] ")
+        print(f"[!] Troubleshooting:")
+        print(f"[!]   1. File may be extremely large")
+        print(f"[!]   2. Increase available memory for Docker container")
+        print(f"[!]   3. Close other memory-intensive processes")
+        print(f"[!]   4. Consider excluding very large files from sync")
+        print(f"[!] ")
+        print(f"[!] Note: Hash calculation uses dynamic chunk sizing (64KB-8MB)")
+        print(f"[!]       to minimize memory usage, but very large files may still")
+        print(f"[!]       cause issues on low-memory systems.")
+        print(f"[!] ========================================")
+        return None
+
+    except UnicodeDecodeError as e:
+        # File path has encoding issues (rare but possible)
         if is_debug_enabled():
-            print(f"[!] Error calculating hash for {file_path}: {e}")
+            print(f"[!] ========================================")
+            print(f"[!] FILE PATH ENCODING ERROR")
+            print(f"[!] ========================================")
+            print(f"[!] File path contains characters that cannot be decoded.")
+            print(f"[!] ")
+            print(f"[!] Troubleshooting:")
+            print(f"[!]   1. File path may contain non-UTF-8 characters")
+            print(f"[!]   2. Rename file to use standard ASCII characters")
+            print(f"[!]   3. Check filesystem encoding settings")
+            print(f"[!] ")
+            print(f"[!] Technical details: {str(e)[:200]}")
+            print(f"[!] ========================================")
+        return None
+
+    except Exception as e:
+        # Unexpected errors - show detailed info in debug mode
+        if is_debug_enabled():
+            print(f"[!] Unexpected error calculating hash for {file_path}")
+            print(f"    Error type: {type(e).__name__}")
+            print(f"    Error: {str(e)[:200]}")
         return None
 
 

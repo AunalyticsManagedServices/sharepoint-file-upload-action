@@ -183,44 +183,148 @@ def convert_mermaid_to_svg(mermaid_code, filename=None):
 
         svg_path = mmd_path.replace('.mmd', '.svg')
 
-        # Run mermaid-cli to convert to SVG
-        # Using puppeteer config to work in Docker container
-        result = subprocess.run(
-            ['mmdc', '-i', mmd_path, '-o', svg_path, '--puppeteerConfigFile', '/usr/src/app/puppeteer-config.json'],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        try:
+            # Run mermaid-cli to convert to SVG
+            # Using puppeteer config for headless Chromium settings
+            # Using mermaid config to prevent text truncation issues
+            result = subprocess.run(
+                ['mmdc', '-i', mmd_path, '-o', svg_path,
+                 '--puppeteerConfigFile', '/usr/src/app/puppeteer-config.json',
+                 '--configFile', '/usr/src/app/mermaid-config.json'],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True  # Will raise CalledProcessError on non-zero exit
+            )
 
-        if result.returncode == 0 and os.path.exists(svg_path):
-            # Read the generated SVG
-            with open(svg_path, 'r', encoding='utf-8') as f:
-                svg_content = f.read()
+            # Success - read the generated SVG
+            if os.path.exists(svg_path):
+                with open(svg_path, 'r', encoding='utf-8') as f:
+                    svg_content = f.read()
 
-            # Clean up temporary files
-            os.unlink(mmd_path)
-            os.unlink(svg_path)
+                # Clean up temporary files
+                os.unlink(mmd_path)
+                os.unlink(svg_path)
 
-            return svg_content
-        else:
-            if filename:
-                print(f"[!] Mermaid conversion failed: {filename}")
-                print(f"    Error: {result.stderr}")
+                return svg_content
             else:
-                print(f"[!] Mermaid conversion failed: {result.stderr}")
+                # Unexpected - mmdc returned 0 but didn't create SVG
+                print(f"[!] SVG file was not created by mmdc (unexpected)")
+                if filename:
+                    print(f"    File: {filename}")
+                if os.path.exists(mmd_path):
+                    os.unlink(mmd_path)
+                return None
+
+        except FileNotFoundError:
+            # mmdc binary not found - Docker configuration issue
+            error_msg = "Mermaid CLI (mmdc) not found - Docker container configuration issue"
+            print(f"[!] ========================================")
+            print(f"[!] MERMAID CLI NOT FOUND")
+            print(f"[!] ========================================")
+            if filename:
+                print(f"[!] File: {filename}")
+            print(f"[!] ")
+            print(f"[!] This is a Docker container configuration issue.")
+            print(f"[!] ")
+            print(f"[!] Troubleshooting steps:")
+            print(f"[!]   1. Verify mermaid-cli is installed:")
+            print(f"[!]      npm list -g @mermaid-js/mermaid-cli")
+            print(f"[!]   2. Check Dockerfile installs mermaid-cli correctly:")
+            print(f"[!]      RUN npm install -g @mermaid-js/mermaid-cli")
+            print(f"[!]   3. Verify PATH includes Node.js global bin directory")
+            print(f"[!]   4. Rebuild Docker container if configuration changed")
+            print(f"[!] ========================================")
             # Clean up temp file
+            if os.path.exists(mmd_path):
+                os.unlink(mmd_path)
+            return None
+
+        except subprocess.TimeoutExpired as e:
+            # Diagram took too long to render - likely too complex
+            print(f"[!] ========================================")
+            print(f"[!] MERMAID CONVERSION TIMEOUT")
+            print(f"[!] ========================================")
+            if filename:
+                print(f"[!] File: {filename}")
+            print(f"[!] ")
+            print(f"[!] Diagram rendering timed out after {e.timeout} seconds.")
+            print(f"[!] ")
+            print(f"[!] Troubleshooting steps:")
+            print(f"[!]   1. Diagram may be too complex for Chromium to render")
+            print(f"[!]   2. Consider simplifying the diagram (fewer nodes/edges)")
+            print(f"[!]   3. Split large diagram into multiple smaller diagrams")
+            print(f"[!]   4. Increase timeout in code if needed (current: 30s)")
+            print(f"[!] ")
+            print(f"[!] The diagram will be shown as a code block instead of rendered SVG.")
+            print(f"[!] ========================================")
+            # Clean up temp files
             if os.path.exists(mmd_path):
                 os.unlink(mmd_path)
             if os.path.exists(svg_path):
                 os.unlink(svg_path)
             return None
 
-    except Exception as e:
+        except subprocess.CalledProcessError as e:
+            # mmdc failed - usually syntax error in diagram
+            print(f"[!] ========================================")
+            print(f"[!] MERMAID DIAGRAM SYNTAX ERROR")
+            print(f"[!] ========================================")
+            if filename:
+                print(f"[!] File: {filename}")
+            print(f"[!] ")
+            print(f"[!] Mermaid CLI failed with exit code {e.returncode}")
+            print(f"[!] This usually means the diagram has syntax errors that sanitization couldn't fix.")
+            print(f"[!] ")
+            if e.stderr:
+                print(f"[!] Error output from mmdc:")
+                # Print first 300 chars of stderr
+                stderr_lines = e.stderr[:300].split('\n')
+                for line in stderr_lines:
+                    if line.strip():
+                        print(f"[!]   {line}")
+            print(f"[!] ")
+            print(f"[!] First 200 characters of diagram code:")
+            print(f"[!]   {sanitized_code[:200]}")
+            print(f"[!] ")
+            print(f"[!] The diagram will be shown as a code block instead of rendered SVG.")
+            print(f"[!] ========================================")
+            # Clean up temp files
+            if os.path.exists(mmd_path):
+                os.unlink(mmd_path)
+            if os.path.exists(svg_path):
+                os.unlink(svg_path)
+            return None
+
+    except OSError as e:
+        # File I/O errors (permissions, disk full, etc.)
+        print(f"[!] ========================================")
+        print(f"[!] FILE I/O ERROR - Mermaid Conversion")
+        print(f"[!] ========================================")
         if filename:
-            print(f"[!] Error converting Mermaid diagram: {filename}")
-            print(f"    Error: {e}")
+            print(f"[!] File: {filename}")
+        print(f"[!] ")
+        print(f"[!] Could not read/write temporary files for Mermaid conversion.")
+        print(f"[!] ")
+        print(f"[!] Troubleshooting steps:")
+        print(f"[!]   1. Check disk space - may be full")
+        print(f"[!]   2. Verify permissions on temp directory")
+        print(f"[!]   3. Check if filesystem is read-only")
+        print(f"[!] ")
+        print(f"[!] Technical details: {str(e)[:200]}")
+        print(f"[!] ========================================")
+        return None
+
+    except Exception as e:
+        # Unexpected errors
+        if filename:
+            print(f"[!] Unexpected error converting Mermaid diagram: {filename}")
+            print(f"    Error type: {type(e).__name__}")
+            print(f"    Error: {str(e)[:200]}")
         else:
-            print(f"[!] Error converting Mermaid diagram: {e}")
+            print(f"[!] Unexpected error converting Mermaid diagram")
+            print(f"    Error type: {type(e).__name__}")
+            print(f"    Error: {str(e)[:200]}")
         return None
 
 

@@ -1,0 +1,17 @@
+{
+  "flowchart": {
+    "htmlLabels": false,
+    "useMaxWidth": true
+  },
+  "sequence": {
+    "useMaxWidth": true
+  },
+  "gantt": {
+    "useMaxWidth": true
+  },
+  "theme": "default",
+  "themeVariables": {
+    "fontFamily": "\"DejaVu Sans\", \"Noto Sans\", sans-serif",
+    "fontSize": "16px"
+  }
+}

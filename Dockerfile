@@ -3,7 +3,8 @@ HEALTHCHECK NONE
 WORKDIR /usr/src/app
 
 # Install Node.js, npm, and required dependencies for mermaid-cli
-# Also install Chromium which is needed by Puppeteer (used by mermaid-cli)
+# Also install Chromium and comprehensive font support for proper text rendering
+# Font packages prevent text truncation issues in Mermaid diagrams
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -13,7 +14,14 @@ RUN apk add --no-cache \
     freetype-dev \
     harfbuzz \
     ca-certificates \
-    ttf-freefont
+    ttf-freefont \
+    font-noto-cjk \
+    font-noto-emoji \
+    terminus-font \
+    ttf-dejavu \
+    ttf-inconsolata \
+    ttf-linux-libertine \
+    && fc-cache -f
 
 # Environment variables matching official mermaid-cli Docker setup
 ENV CHROME_BIN="/usr/bin/chromium-browser" \
@@ -39,9 +47,10 @@ RUN adduser -D -u 1000 sharepoint && \
 
 USER sharepoint
 
-# Copy the Python script, package, and puppeteer config
+# Copy the Python script, package, puppeteer config, and mermaid config
 COPY src/main.py /usr/src/app/
 COPY src/sharepoint_sync /usr/src/app/sharepoint_sync
 COPY src/puppeteer-config.json /usr/src/app/
+COPY src/mermaid-config.json /usr/src/app/
 # full path is necessary or it defaults to main branch copy
 ENTRYPOINT [ "python", "/usr/src/app/main.py" ]

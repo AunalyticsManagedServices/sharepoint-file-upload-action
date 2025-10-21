@@ -147,15 +147,121 @@ def make_graph_request_with_retry(url, headers, method='GET', json_data=None, da
             # Success or client error (don't retry client errors like 400, 401, 403, 404)
             return response
 
-        except requests.exceptions.RequestException as e:
-            # Network/connection errors - retry with exponential backoff
+        except requests.exceptions.Timeout as e:
+            # Request timeout - retry with exponential backoff
             if attempt < max_retries:
                 wait_seconds = (2 ** attempt) + 1
-                print(f"[!] Network error: {e}. Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
+                timeout_info = str(e)[:100] if str(e) else "timeout"
+                print(f"[!] Request timeout ({timeout_info}). Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
                 time.sleep(wait_seconds)
                 continue
             else:
-                print(f"[!] Network errors exhausted all retries: {e}")
+                print("[!] ========================================")
+                print("[!] REQUEST TIMEOUT - All retries exhausted")
+                print("[!] ========================================")
+                print(f"[!] The request to Graph API timed out after {max_retries} retry attempts.")
+                print("[!] ")
+                print("[!] Troubleshooting steps:")
+                print("[!]   1. Check your internet connection speed")
+                print("[!]   2. Verify network connectivity to Microsoft Graph API")
+                print("[!]   3. If using a proxy, verify proxy configuration")
+                print("[!]   4. Try again - Microsoft services may be experiencing issues")
+                print("[!]   5. For large file uploads, this may indicate a very slow connection")
+                print("[!] ")
+                print(f"[!] URL: {url[:100]}...")
+                print("[!] ========================================")
+                raise Exception(f"Graph API request timed out after {max_retries} retries. Check network connectivity.")
+
+        except requests.exceptions.SSLError as e:
+            # SSL errors usually aren't transient - fail fast with clear message
+            print("[!] ========================================")
+            print("[!] SSL/TLS CERTIFICATE ERROR")
+            print("[!] ========================================")
+            print("[!] Failed to verify SSL certificate for Microsoft Graph API.")
+            print("[!] ")
+            print("[!] Troubleshooting steps:")
+            print("[!]   1. Verify system certificate store is up to date")
+            print("[!]   2. Check if corporate proxy is intercepting SSL/TLS connections")
+            print("[!]   3. Ensure system clock is accurate (SSL cert validation requires correct time)")
+            print("[!]   4. Try updating Python's certifi package: pip install --upgrade certifi")
+            print("[!]   5. If behind a corporate firewall, you may need to import company's root CA")
+            print("[!] ")
+            print(f"[!] Technical details: {str(e)[:300]}")
+            print(f"[!] URL: {url[:100]}...")
+            print("[!] ========================================")
+            raise Exception(f"SSL certificate verification failed: {str(e)[:200]}")
+
+        except requests.exceptions.ProxyError as e:
+            # Proxy connection errors - fail fast with configuration guidance
+            print("[!] ========================================")
+            print("[!] PROXY CONNECTION ERROR")
+            print("[!] ========================================")
+            print("[!] Failed to connect through proxy server.")
+            print("[!] ")
+            print("[!] Troubleshooting steps:")
+            print("[!]   1. Verify HTTP_PROXY and HTTPS_PROXY environment variables are set correctly")
+            print("[!]   2. Check proxy server is accessible and responding")
+            print("[!]   3. Verify proxy authentication credentials if required")
+            print("[!]   4. Test direct connection (temporarily disable proxy) to isolate issue")
+            print("[!]   5. Check proxy server allows connections to *.microsoft.com")
+            print("[!] ")
+            print(f"[!] Technical details: {str(e)[:300]}")
+            print("[!] ========================================")
+            raise Exception(f"Proxy connection failed: {str(e)[:200]}")
+
+        except requests.exceptions.TooManyRedirects as e:
+            # Redirect loop - indicates configuration issue
+            print("[!] ========================================")
+            print("[!] TOO MANY REDIRECTS")
+            print("[!] ========================================")
+            print("[!] Encountered redirect loop - this indicates a configuration issue.")
+            print("[!] ")
+            print("[!] Troubleshooting steps:")
+            print(f"[!]   1. Verify Graph API endpoint is correct: {url[:100]}...")
+            print("[!]   2. Check if proxy is misconfigured and causing redirect loops")
+            print("[!]   3. Verify you're using the correct cloud endpoint:")
+            print("[!]      - Commercial: graph.microsoft.com")
+            print("[!]      - GovCloud: graph.microsoft.us")
+            print("[!] ")
+            print(f"[!] Technical details: {str(e)[:300]}")
+            print("[!] ========================================")
+            raise Exception(f"Too many redirects - possible configuration issue: {str(e)[:200]}")
+
+        except requests.exceptions.ConnectionError as e:
+            # Network/DNS connection errors - retry with exponential backoff
+            if attempt < max_retries:
+                wait_seconds = (2 ** attempt) + 1
+                error_detail = str(e)[:100]
+                print(f"[!] Network connection error: {error_detail}. Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
+                time.sleep(wait_seconds)
+                continue
+            else:
+                print("[!] ========================================")
+                print("[!] NETWORK CONNECTION FAILED")
+                print("[!] ========================================")
+                print(f"[!] Could not establish connection after {max_retries} retry attempts.")
+                print("[!] ")
+                print("[!] Troubleshooting steps:")
+                print("[!]   1. Verify internet connectivity (try: ping 8.8.8.8)")
+                print("[!]   2. Check DNS resolution (try: nslookup graph.microsoft.com)")
+                print("[!]   3. Ensure firewall allows HTTPS (port 443) to *.microsoft.com")
+                print("[!]   4. If using VPN, verify VPN connection is stable")
+                print("[!]   5. Try disabling any VPN/proxy temporarily to isolate issue")
+                print("[!]   6. Check Microsoft Azure status page for service outages")
+                print("[!] ")
+                print(f"[!] Technical details: {str(e)[:300]}")
+                print("[!] ========================================")
+                raise Exception(f"Network connection failed after {max_retries} retries: {str(e)[:200]}")
+
+        except requests.exceptions.RequestException as e:
+            # Catch-all for other request errors (should be rare after specific catches above)
+            if attempt < max_retries:
+                wait_seconds = (2 ** attempt) + 1
+                print(f"[!] HTTP request error: {str(e)[:100]}. Retrying in {wait_seconds} seconds... ({attempt + 1}/{max_retries})")
+                time.sleep(wait_seconds)
+                continue
+            else:
+                print(f"[!] HTTP request errors exhausted all retries: {str(e)[:200]}")
                 raise
 
     # Should never reach here, but just in case
