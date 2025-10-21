@@ -49,6 +49,7 @@ class RateLimitMonitor:
             'metadata_get': 0,          # GET file/folder metadata
             'metadata_update': 0,       # PATCH list item fields
             'folder_create': 0,         # POST create folder
+            'folder_check': 0,          # GET /children to check folder existence
             'batch_operation': 0,       # POST to $batch endpoint
             'cache_build': 0,           # GET with $expand for caching
             'column_ops': 0,            # GET/POST to /columns endpoint
@@ -148,9 +149,12 @@ class RateLimitMonitor:
         # Batch operations
         elif method == 'POST' and '$batch' in url_lower:
             self.operations['batch_operation'] += 1
-        # Cache building operations (GET with $expand)
+        # Cache building operations (GET with $expand=listItem)
         elif method == 'GET' and '$expand=listitem' in url_lower:
             self.operations['cache_build'] += 1
+        # Folder existence check (GET /children without $expand)
+        elif method == 'GET' and '/children' in url_lower and '$expand' not in url_lower:
+            self.operations['folder_check'] += 1
         # Column operations (checking/creating FileHash column)
         elif '/columns' in url_lower:
             self.operations['column_ops'] += 1

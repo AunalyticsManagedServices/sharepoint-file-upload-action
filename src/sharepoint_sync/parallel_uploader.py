@@ -438,10 +438,17 @@ class ParallelUploader:
             target_folder_id = root_item_id
             if dir_path and dir_path != "." and dir_path != "":
                 from .uploader import ensure_folder_exists
+
+                # Extract folder cache from sharepoint_cache if available
+                folder_cache = None
+                if isinstance(self.sharepoint_cache, dict) and 'folders' in self.sharepoint_cache:
+                    folder_cache = self.sharepoint_cache.get('folders')
+
                 target_folder_id = ensure_folder_exists(
                     site_id, drive_id, root_item_id, dir_path,
                     config.tenant_id, config.client_id, config.client_secret,
-                    config.login_endpoint, config.graph_endpoint
+                    config.login_endpoint, config.graph_endpoint,
+                    folder_cache=folder_cache
                 )
 
             # EARLY CHECK: Does .html file already exist with matching source .md hash?

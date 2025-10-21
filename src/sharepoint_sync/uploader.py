@@ -33,7 +33,8 @@ created_folders = {}
 
 
 def ensure_folder_exists(site_id, drive_id, parent_item_id, folder_path,
-                        tenant_id, client_id, client_secret, login_endpoint, graph_endpoint):
+                        tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
+                        folder_cache=None):
     """
     Recursively create folder structure in SharePoint if it doesn't exist using Graph API.
 
@@ -50,6 +51,8 @@ def ensure_folder_exists(site_id, drive_id, parent_item_id, folder_path,
         client_secret (str): Azure AD application client secret
         login_endpoint (str): Azure AD login endpoint
         graph_endpoint (str): Microsoft Graph API endpoint
+        folder_cache (dict): Optional folder cache from build_sharepoint_cache()
+            Keys are folder paths, values are dicts with 'item_id' and 'name'
 
     Returns:
         str: The item ID of the final folder in the path, ready to receive files
@@ -58,11 +61,12 @@ def ensure_folder_exists(site_id, drive_id, parent_item_id, folder_path,
         Exception: If folder creation fails after all retry attempts
 
     Example:
-        target_id = ensure_folder_exists(site_id, drive_id, root_id, "2024/Reports/January", ...)
+        target_id = ensure_folder_exists(site_id, drive_id, root_id, "2024/Reports/January", ..., folder_cache=cache['folders'])
         # Now upload file to the January folder using target_id
 
     Note:
         - Caches created folders to minimize API calls
+        - Uses folder_cache (from SharePoint metadata cache) to skip folder existence checks
         - Handles both forward slash (/) and backslash (\\) path separators
         - Sanitizes folder names for SharePoint compatibility
         - Uses direct Graph REST API calls
@@ -103,38 +107,52 @@ def ensure_folder_exists(site_id, drive_id, parent_item_id, folder_path,
         # ============================================================
         folder_found = False
 
-        try:
+        # Check folder cache first (fastest - 0 API calls)
+        if folder_cache and current_path in folder_cache:
+            folder_item = {
+                'id': folder_cache[current_path]['item_id'],
+                'name': folder_cache[current_path]['name']
+            }
+            created_folders[current_path] = folder_item
+            current_item_id = folder_item['id']
             if is_debug_enabled():
-                print(f"[?] Checking if folder exists: {current_path}")
+                print(f"[CACHE HIT] Folder found in cache: {current_path}")
+            folder_found = True
 
-            # Get all items in current folder using Graph API
-            children = list_folder_children_graph(
-                site_id, drive_id, current_item_id,
-                tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
-                folder_path=current_path
-            )
+        # Fall back to API query if not in cache
+        if not folder_found:
+            try:
+                if is_debug_enabled():
+                    print(f"[?] Checking if folder exists: {current_path}")
 
-            if children is not None:
-                # Iterate through children to find matching folder
-                for child in children:
-                    # Check if this is a folder with matching name
-                    if child.get('name') == folder_name and 'folder' in child:
-                        # Folder found! Cache it
-                        folder_item = {
-                            'id': child.get('id'),
-                            'name': child.get('name')
-                        }
-                        created_folders[current_path] = folder_item
-                        current_item_id = folder_item['id']
-                        if is_debug_enabled():
-                            print(f"[✓] Folder already exists: {current_path}")
-                        folder_found = True
-                        break
+                # Get all items in current folder using Graph API
+                children = list_folder_children_graph(
+                    site_id, drive_id, current_item_id,
+                    tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
+                    folder_path=current_path
+                )
 
-        except Exception as e:
-            # API call failed - assume folder doesn't exist
-            print(f"[!] Error checking folder existence: {e}")
-            folder_found = False
+                if children is not None:
+                    # Iterate through children to find matching folder
+                    for child in children:
+                        # Check if this is a folder with matching name
+                        if child.get('name') == folder_name and 'folder' in child:
+                            # Folder found! Cache it
+                            folder_item = {
+                                'id': child.get('id'),
+                                'name': child.get('name')
+                            }
+                            created_folders[current_path] = folder_item
+                            current_item_id = folder_item['id']
+                            if is_debug_enabled():
+                                print(f"[✓] Folder already exists: {current_path}")
+                            folder_found = True
+                            break
+
+            except Exception as e:
+                # API call failed - assume folder doesn't exist
+                print(f"[!] Error checking folder existence: {e}")
+                folder_found = False
 
         # ============================================================
         # STEP 2: Create folder if it doesn't exist
@@ -740,11 +758,22 @@ def upload_file_with_structure(site_id, drive_id, root_item_id, local_file_path,
         if is_debug_enabled():
             print(f"[!] Path sanitized for SharePoint: {rel_path} -> {sanitized_rel_path}")
 
+    # Extract folder cache and file cache if available
+    # New cache structure: {'files': {...}, 'folders': {...}}
+    folder_cache = None
+    file_cache = sharepoint_cache  # Default: assume it's the old structure (just files)
+
+    if isinstance(sharepoint_cache, dict) and 'folders' in sharepoint_cache:
+        # New structure detected
+        folder_cache = sharepoint_cache.get('folders')
+        file_cache = sharepoint_cache.get('files')
+
     # If there's a directory structure, create it in SharePoint
     if dir_path and dir_path != "." and dir_path != "":
         target_folder_id = ensure_folder_exists(
             site_id, drive_id, root_item_id, dir_path,
-            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint
+            tenant_id, client_id, client_secret, login_endpoint, graph_endpoint,
+            folder_cache=folder_cache
         )
     else:
         target_folder_id = root_item_id
@@ -762,7 +791,7 @@ def upload_file_with_structure(site_id, drive_id, root_item_id, local_file_path,
                 site_url, list_name, filehash_column_available,
                 tenant_id, client_id, client_secret, login_endpoint,
                 graph_endpoint, upload_stats_dict, metadata_queue=metadata_queue,
-                display_path=display_path, sharepoint_cache=sharepoint_cache
+                display_path=display_path, sharepoint_cache=file_cache
             )
             break
         except Exception as e:

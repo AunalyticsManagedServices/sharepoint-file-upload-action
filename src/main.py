@@ -852,11 +852,18 @@ def perform_sync_deletion(local_files, base_path, config, sharepoint_cache=None)
     # Use cache if available (eliminates API call), otherwise query SharePoint
     print("\n[*] Checking for orphaned files...")
     if sharepoint_cache is not None:
+        # Extract files from cache - handle both old and new structure
+        # Old structure: direct dict of files
+        # New structure: {'files': {...}, 'folders': {...}}
+        files_cache = sharepoint_cache
+        if isinstance(sharepoint_cache, dict) and 'files' in sharepoint_cache:
+            files_cache = sharepoint_cache['files']
+
         # Convert cache to same format as list_files_in_folder_recursive
         # Cache format: {"path/to/file.html": {"item_id": "...", "size": ..., "name": "..."}}
         # Need format: [{"path": "path/to/file.html", "id": "...", "size": ..., "name": "...", "drive_item": None}]
         sharepoint_files = []
-        for file_path, file_info in sharepoint_cache.items():
+        for file_path, file_info in files_cache.items():
             sharepoint_files.append({
                 'path': file_path,
                 'id': file_info.get('item_id'),
