@@ -1425,16 +1425,6 @@ def build_sharepoint_cache(folder_path, site_url, tenant_id, client_id,
         - Cache does NOT auto-update during execution
         - Cache may become stale if files are modified during execution (rare in CI/CD)
 
-    Example:
-        >>> cache = build_sharepoint_cache("Documents/Reports", site_url, ...)
-        >>> file_info = cache['files'].get("reports/2024/summary.pdf")
-        >>> if file_info:
-        >>>     local_hash = calculate_file_hash("summary.pdf")
-        >>>     if local_hash == file_info['file_hash']:
-        >>>         print("File unchanged, skip upload")
-        >>> folder_info = cache['folders'].get("reports/2024")
-        >>> if folder_info:
-        >>>     print(f"Folder item ID: {folder_info['item_id']}")
     """
     cache = {}
 
