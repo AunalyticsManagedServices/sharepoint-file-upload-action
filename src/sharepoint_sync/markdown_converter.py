@@ -15,23 +15,32 @@ import mistune
 
 def sanitize_mermaid_code(mermaid_code):
     """
-    Sanitize Mermaid diagram code to fix common syntax issues for mermaid-cli.
+    Sanitize Mermaid diagram code to fix syntax issues for mermaid-cli.
 
-    Based on mermaid-cli strict parsing requirements, this handles:
-    - Ensures self-closing HTML tags (<br> -> <br/>)
-    - Double quotes in node labels (break Mermaid syntax)
-    - Special characters that break parser in limited contexts
-    - Reserved words like "end" (lowercase breaks diagrams)
-    - Problematic node prefixes ("o", "x" create unintended edges)
-    - HTML tags except <br/>
+    This function provides automatic fixes for common mermaid-cli parse errors by
+    replacing problematic characters with text alternatives. Based on mermaid-cli
+    strict parsing requirements.
+
+    Handles:
+    - Self-closing HTML tags: <br> → <br/>
+    - Comparison operators: < → "under", > → "over", <= → "at most", >= → "at least"
+    - Ampersands: & → "and"
+    - Double quotes: " → '
+    - Reserved words: "end" → "End"
+    - HTML tags (removes all except <br/>)
     - Curly braces in comments
-    - Edge labels (text between pipes on arrows)
-    - Double pipe issues in edge syntax
+    - Double pipe issues: -->|| → -->|
 
-    CRITICAL: mermaid-cli strict parser requirements differ from web editor:
-    - Requires self-closing tags: <br/> not <br>
-    - HTML entities (&#38;, &#35;) break parser in subgraphs, decision nodes, edge labels
-    - Characters < > & must NOT appear in edge labels or decision nodes
+    Character Replacement Strategy:
+    - Replaces < > & with TEXT alternatives (not HTML entities)
+    - HTML entities (&#38;, &#35;) break mermaid-cli parser
+    - Text replacements preserve meaning while ensuring parse success
+    - Applied to: node labels, edge labels, decision nodes, subgraph labels
+
+    Examples:
+        {Count < 3?} → {Count under 3?}
+        -->|Battery < 50%| → -->|Battery under 50%|
+        subgraph ["A & B"] → subgraph ["A and B"]
 
     Args:
         mermaid_code (str): Raw Mermaid diagram definition
@@ -60,17 +69,28 @@ def sanitize_mermaid_code(mermaid_code):
     sanitized = re.sub(r'(-->|---)\|\|', r'\1|', sanitized)
     sanitized = re.sub(r'\|\|(\w)', r'|\1', sanitized)
 
-    # 5. Minimal special character handling for mermaid-cli
-    # IMPORTANT: mermaid-cli breaks with HTML entities in most contexts
-    # Only encode truly problematic characters, and only in safe contexts
+    # 5. Smart character replacement for mermaid-cli compatibility
+    # IMPORTANT: mermaid-cli breaks with HTML entities AND with raw < > & in certain contexts
+    # Replace these with text alternatives that preserve meaning but use safe characters
     def sanitize_content(content):
-        """Replace special characters that break Mermaid syntax (minimal encoding)"""
-        # Only replace quotes and pipes which are syntactically problematic
-        # Do NOT encode &, #, %, < , > as HTML entities - they break mermaid-cli parser
-        content = content.replace('"', "'")  # Use single quote instead of double
-        # Pipe character | is only problematic in certain contexts (edge labels)
-        # Don't encode it here - handle in context-specific sanitization
-        return content
+        """Replace special characters with text alternatives (mermaid-cli safe)"""
+        # Replace quotes (syntactically required)
+        content = content.replace('"', "'")
+
+        # Replace comparison operators and special characters with text alternatives
+        # These break mermaid-cli parser in edge labels, decision nodes, and subgraph labels
+        # Do NOT use HTML entities - use plain text instead
+        content = content.replace('<=', ' at most ')
+        content = content.replace('>=', ' at least ')
+        content = content.replace('<', ' under ')
+        content = content.replace('>', ' over ')
+        content = content.replace('&', ' and ')
+
+        # Clean up any double spaces created by replacements
+        while '  ' in content:
+            content = content.replace('  ', ' ')
+
+        return content.strip()
 
     def sanitize_node_content(match):
         """Replace special characters in square bracket node content"""
@@ -94,19 +114,28 @@ def sanitize_mermaid_code(mermaid_code):
 
     # 7. Handle curly brace diamond/rhombus nodes: {text}, {{text}}
     # CRITICAL: Decision nodes {} are parsed strictly by mermaid-cli
-    # HTML entities and special characters break the DIAMOND_STOP token parser
-    # Only remove line breaks, don't encode characters
+    # Special characters < > & break the DIAMOND_STOP token parser
     def sanitize_curly_content(match):
-        """Remove line breaks from decision node content (minimal sanitization)"""
+        """Smart sanitization for decision nodes (removes <br/> and replaces special chars)"""
         opening_braces = match.group(1)
         content = match.group(2)
         closing_braces = match.group(3)
 
-        # Only remove <br/> tags from decision nodes - they break the parser
-        # Do NOT apply full sanitization - it adds HTML entities that break parser
+        # Remove <br/> tags from decision nodes - they break the parser
         content = re.sub(r'<br\s*/?>','', content, flags=re.IGNORECASE)
-        # Replace double quotes with single quotes (syntactic requirement)
+
+        # Replace special characters with text alternatives
         content = content.replace('"', "'")
+        content = content.replace('<=', ' at most ')
+        content = content.replace('>=', ' at least ')
+        content = content.replace('<', ' under ')
+        content = content.replace('>', ' over ')
+        content = content.replace('&', ' and ')
+
+        # Clean up double spaces
+        while '  ' in content:
+            content = content.replace('  ', ' ')
+        content = content.strip()
 
         return f'{opening_braces}{content}{closing_braces}'
 
@@ -131,17 +160,26 @@ def sanitize_mermaid_code(mermaid_code):
 
     # 10. Handle edge labels (text between pipes on arrows)
     # Pattern: -->|text| or ---|text|--- etc.
-    # CRITICAL: Edge labels in mermaid-cli cannot contain HTML entities or < > & characters
+    # CRITICAL: Edge labels in mermaid-cli cannot contain < > & characters
     def sanitize_edge_label(match):
-        """Minimal sanitization for edge labels (mermaid-cli strict mode)"""
+        """Smart sanitization for edge labels (replaces problematic characters)"""
         prefix = match.group(1)
         label = match.group(2)
         suffix = match.group(3)
 
-        # For edge labels, only replace quotes - they break syntax
-        # Do NOT encode &, #, % as HTML entities - they break mermaid-cli parser
-        # Characters < > & should not appear here (will cause parse errors)
+        # Apply same smart replacements as node content
+        # Replace comparison operators and special characters with text
         label_sanitized = label.replace('"', "'")
+        label_sanitized = label_sanitized.replace('<=', ' at most ')
+        label_sanitized = label_sanitized.replace('>=', ' at least ')
+        label_sanitized = label_sanitized.replace('<', ' under ')
+        label_sanitized = label_sanitized.replace('>', ' over ')
+        label_sanitized = label_sanitized.replace('&', ' and ')
+
+        # Clean up double spaces
+        while '  ' in label_sanitized:
+            label_sanitized = label_sanitized.replace('  ', ' ')
+        label_sanitized = label_sanitized.strip()
 
         return f'{prefix}|{label_sanitized}|{suffix}'
 
