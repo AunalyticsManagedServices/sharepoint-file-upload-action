@@ -74,6 +74,12 @@ def sanitize_mermaid_code(mermaid_code):
     # Replace these with text alternatives that preserve meaning but use safe characters
     def sanitize_content(content):
         """Replace special characters with text alternatives (mermaid-cli safe)"""
+        # CRITICAL: Protect <br/> and <br> tags from character replacement
+        # Use unique placeholders that won't appear in normal text
+        BR_PLACEHOLDER = '___LINEBREAK___'
+        content = content.replace('<br/>', BR_PLACEHOLDER)
+        content = content.replace('<br>', BR_PLACEHOLDER)
+
         # Replace quotes (syntactically required)
         content = content.replace('"', "'")
 
@@ -85,6 +91,9 @@ def sanitize_mermaid_code(mermaid_code):
         content = content.replace('<', ' under ')
         content = content.replace('>', ' over ')
         content = content.replace('&', ' and ')
+
+        # Restore <br/> tags
+        content = content.replace(BR_PLACEHOLDER, '<br/>')
 
         # Clean up any double spaces created by replacements
         while '  ' in content:
@@ -167,14 +176,22 @@ def sanitize_mermaid_code(mermaid_code):
         label = match.group(2)
         suffix = match.group(3)
 
+        # Protect <br/> tags from character replacement
+        BR_PLACEHOLDER = '___LINEBREAK___'
+        label_sanitized = label.replace('<br/>', BR_PLACEHOLDER)
+        label_sanitized = label_sanitized.replace('<br>', BR_PLACEHOLDER)
+
         # Apply same smart replacements as node content
         # Replace comparison operators and special characters with text
-        label_sanitized = label.replace('"', "'")
+        label_sanitized = label_sanitized.replace('"', "'")
         label_sanitized = label_sanitized.replace('<=', ' at most ')
         label_sanitized = label_sanitized.replace('>=', ' at least ')
         label_sanitized = label_sanitized.replace('<', ' under ')
         label_sanitized = label_sanitized.replace('>', ' over ')
         label_sanitized = label_sanitized.replace('&', ' and ')
+
+        # Restore <br/> tags
+        label_sanitized = label_sanitized.replace(BR_PLACEHOLDER, '<br/>')
 
         # Clean up double spaces
         while '  ' in label_sanitized:
