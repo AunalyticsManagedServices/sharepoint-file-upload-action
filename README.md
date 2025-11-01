@@ -12,7 +12,7 @@
 | [Overview](#-overview) | [Required Parameters](#required-parameters) | [Smart Sync](#smart-sync-with-content-hashing) | [Troubleshooting](#-troubleshooting) |
 | [Quick Start](#-quick-start) | [Optional Parameters](#optional-parameters) | [Markdown Conversion](#markdown-conversion) | [Performance](#-performance) |
 | [Usage Examples](#-usage-examples) | [Glob Patterns](#file-glob-patterns) | [Sync Deletion](#sync-deletion) | [Security](#-security) |
-| | [Exclusion Patterns](#exclusion-patterns) | [Filename Sanitization](#filename-sanitization) | [Version History](#-version-history) |
+| | [Exclusion Patterns](#exclusion-patterns) | [Filename Sanitization](#filename-sanitization) | [Contributing](#-contributing) |
 
 ## 🎯 Overview
 
@@ -514,7 +514,8 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
 
 ## 📚 Usage Examples
 
-### Example 1: Sync Entire Repository
+<details>
+<summary><strong>Example 1: Sync Entire Repository</strong></summary>
 
 ```yaml
 - name: Checkout Repository
@@ -533,7 +534,10 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-### Example 2: Markdown Documentation Only
+</details>
+
+<details>
+<summary><strong>Example 2: Markdown Documentation Only</strong></summary>
 
 ```yaml
 - name: Checkout Repository
@@ -553,7 +557,10 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-### Example 3: Exclude Build Artifacts
+</details>
+
+<details>
+<summary><strong>Example 3: Exclude Build Artifacts</strong></summary>
 
 ```yaml
 - name: Checkout Repository
@@ -573,7 +580,10 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-### Example 4: GovCloud Deployment
+</details>
+
+<details>
+<summary><strong>Example 4: GovCloud Deployment</strong></summary>
 
 ```yaml
 - name: Checkout Repository
@@ -593,7 +603,10 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
     graph_endpoint: "graph.microsoft.us"
 ```
 
-### Example 5: Mirror Sync with Cleanup
+</details>
+
+<details>
+<summary><strong>Example 5: Mirror Sync with Cleanup</strong></summary>
 
 ```yaml
 - name: Checkout Repository
@@ -614,7 +627,10 @@ exclude_patterns: "*.tmp,*.bak,.DS_Store,Thumbs.db,.git"
     client_secret: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
 ```
 
-### Example 6: High-Performance Sync for Large Repositories
+</details>
+
+<details>
+<summary><strong>Example 6: High-Performance Sync for Large Repositories</strong></summary>
 
 ```yaml
 name: Sync Documentation
@@ -704,7 +720,10 @@ jobs:
 
 **Performance:** 2,500 files processed in ~2 minutes (vs ~15 minutes without caching)
 
-### Example 7: Force Markdown HTML Regeneration (Mermaid/Font Changes)
+</details>
+
+<details>
+<summary><strong>Example 7: Force Markdown HTML Regeneration (Mermaid/Font Changes)</strong></summary>
 
 ```yaml
 - name: Checkout Repository
@@ -748,6 +767,8 @@ force_upload: true                    # 550 MB total re-uploaded
                                       # Images/PDFs re-uploaded unnecessarily
 ```
 
+</details>
+
 ## 🔧 Advanced Features
 
 ### Parallel Processing for Maximum Performance
@@ -759,7 +780,10 @@ The action uses **parallel processing by default** for maximum performance with 
 - 🚀 **5-10x faster** uploads for repos with 50+ files
 - 📊 **10-20x fewer** API calls (batch metadata updates and caching)
 
-**What Runs in Parallel:**
+<details>
+<summary><strong>📊 Detailed Parallel Processing Information</strong></summary>
+
+### What Runs in Parallel
 
 | Operation | Workers | Description |
 |-----------|---------|-------------|
@@ -767,14 +791,14 @@ The action uses **parallel processing by default** for maximum performance with 
 | **Markdown Conversion** | 4 (internal) | Multiple Mermaid diagrams render concurrently |
 | **Metadata Updates** | Batched (20/request) | Graph API batch endpoint reduces API calls |
 
-**Auto-Configuration:**
+### Auto-Configuration
 
 The action automatically detects your system specifications and configures optimal worker counts:
 - Upload workers: Default 4 (respects Graph API concurrent limit)
 - Hash workers: Detects CPU count for optimal parallel hashing
 - Markdown workers: Fixed at 4 (balances performance vs memory)
 
-**Thread Safety:**
+### Thread Safety
 
 All parallel operations are fully thread-safe with:
 - Sequential console output (no garbled messages)
@@ -782,7 +806,8 @@ All parallel operations are fully thread-safe with:
 - Proper rate limiting coordination
 - Batch queue for efficient metadata updates
 
-**Console Output:**
+### Console Output
+
 ```
 ============================================================
 [✓] SYSTEM CONFIGURATION
@@ -794,7 +819,7 @@ Batch Metadata Updates:    Enabled (20 items/batch)
 ============================================================
 ```
 
-**Configuration:**
+### Configuration
 
 ```yaml
 # Use defaults (recommended for most cases)
@@ -815,7 +840,7 @@ Batch Metadata Updates:    Enabled (20 items/batch)
     # ... other parameters
 ```
 
-**Backward Compatibility:**
+### Backward Compatibility
 
 Parallel processing is fully compatible with existing workflows:
 - ✅ Same console output format
@@ -823,12 +848,14 @@ Parallel processing is fully compatible with existing workflows:
 - ✅ Same error handling and retry logic
 - ✅ No configuration changes required
 
-**Performance Benchmarks:**
+### Performance Benchmarks
 
 | Scenario | Sequential (Old) | Parallel (New) | Improvement |
 |----------|-----------------|----------------|-------------|
 | 100 files, 50 MB | 250s (4 min) | 40-60s (1 min) | **4-6x faster** |
 | 500 files, 200 MB | 1200s (20 min) | 180-300s (3-5 min) | **4-6x faster** |
+
+</details>
 
 ### Smart Sync with Content Hashing
 
@@ -934,35 +961,41 @@ The action uses **xxHash128** for lightning-fast change detection:
 ============================================================
 ```
 
-### FileHash Backfill (Automatic)
+<details>
+<summary><strong>🔄 FileHash Backfill (Automatic)</strong></summary>
 
 Automatically populates empty FileHash values without re-uploading files.
 
-**Problem Solved:**
+### Problem Solved
+
 - Files uploaded before FileHash column existed have empty hash values
 - These files fall back to less reliable size comparison
 - Traditional solution: Force re-upload entire repository (slow, wasteful)
 
-**How Backfill Works:**
+### How Backfill Works
+
 1. Detects files with empty FileHash during comparison
 2. Confirms file is unchanged via size match
 3. Calculates hash from local file content
 4. Updates FileHash field directly (no file upload)
 5. Future checks use hash-based comparison
 
-**Benefits:**
+### Benefits
+
 - 📈 Gradual migration to 100% hash-based comparison
 - 💾 **99.8% bandwidth savings** vs force upload approach
 - ⚡ **90% time savings** (PATCH request vs full upload)
 - 🔄 Always-on feature (no configuration needed)
 
-**Statistics Tracked:**
+### Statistics Tracked
+
 - `hash_backfilled` - Files with hash populated (no upload)
 - `hash_empty_found` - Files discovered with empty hash
 - `hash_backfill_failed` - Failed backfill attempts
 - `hash_column_unavailable` - Files checked when column doesn't exist
 
-**Example Output:**
+### Example Output
+
 ```
 [HASH] FileHash Column Statistics:
    - New hashes saved:         1
@@ -971,10 +1004,13 @@ Automatically populates empty FileHash values without re-uploading files.
    - Empty hash found:         0    ← Drops to 0 after first run
 ```
 
-**Performance Impact:**
+### Performance Impact
+
 - One-time PATCH request per file with empty hash (~200ms each)
 - Example: 200 files with empty hash = 40 seconds vs 6.7 minutes for re-upload
 - **Time savings: 90%** | **Bandwidth savings: 99.8%**
+
+</details>
 
 ### Markdown Conversion
 
@@ -987,54 +1023,70 @@ Converts `.md` files to GitHub-flavored HTML with embedded styling:
 - ✅ Task lists with checkboxes
 - ✅ Blockquotes
 - ✅ Links and images
-- ✅ **Internal link rewriting** (relative markdown links → SharePoint URLs)
+- ✅ **Internal link rewriting** (relative links → SharePoint folder URLs)
 - ✅ **Mermaid diagrams with automatic sanitization** (rendered as embedded SVG)
 
 <details>
 <summary><strong>🔗 Automatic Internal Link Rewriting</strong></summary>
 
-**New in v4.2.0**: Automatically converts relative markdown links to absolute SharePoint URLs.
+**New in v4.2.0**: Automatically converts relative file links to SharePoint folder URLs for easy navigation.
 
 ### How It Works
 
-When converting `.md` to `.html`, the action rewrites internal repository links to proper SharePoint URLs:
+When converting `.md` to `.html`, the action rewrites **all local file links** (not just .md files) to point to their parent folders in SharePoint:
 
 **Before Conversion (in .md file):**
 ```markdown
-See [Installation Guide](../setup/install.md) for details.
-Check [API Reference](api/reference.md#endpoints).
-View [Project README](../../README.md).
+[Installation Guide](../setup/install.md)
+[Update Script](./scripts/Update-System.ps1)
+[API Reference](api/reference.md#endpoints)
+[Config File](./config.json)
 ```
 
 **After Conversion (in .html file):**
 ```html
-See <a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/setup/install.html">Installation Guide</a> for details.
-Check <a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/api/reference.html#endpoints">API Reference</a>.
-View <a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/README.html">Project README</a>.
+<a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/setup" title="View folder containing install.html">Installation Guide</a>
+<a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/scripts" title="View folder containing Update-System.ps1">Update Script</a>
+<a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/api" title="View folder containing reference.html#endpoints">API Reference</a>
+<a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents" title="View folder containing config.json">Config File</a>
 ```
+
+### Link Behavior
+
+**Links point to parent folders**, not files directly:
+- ✅ Clicking opens the SharePoint folder containing the file
+- ✅ Users see all related files in the folder (context)
+- ✅ Hover tooltip shows which file the link refers to
+- ✅ Works for **ALL file types** (.ps1, .py, .json, .md, images, etc.)
 
 ### What Gets Rewritten
 
 | Link Type | Rewritten? | Example |
 |-----------|------------|---------|
-| Relative markdown | ✅ Yes | `../README.md` → Full SharePoint URL |
-| Absolute markdown | ✅ Yes | `/docs/guide.md` → Full SharePoint URL |
-| Anchor links | ✅ Yes | `#section` → Preserved with full URL |
+| Markdown files | ✅ Yes | `../README.md` → Parent folder URL |
+| PowerShell scripts | ✅ Yes | `./Update.ps1` → Parent folder URL |
+| Python scripts | ✅ Yes | `script.py` → Parent folder URL |
+| Config files | ✅ Yes | `config.json` → Parent folder URL |
+| Any file with extension | ✅ Yes | `file.ext` → Parent folder URL |
+| Folders | ✅ Yes | `../docs/` → Folder URL |
+| Anchor links | ✅ Yes | `#section` → Preserved in tooltip |
 | External links | ❌ No | `https://example.com` → Unchanged |
 | Image links | ❌ No | `![logo](logo.png)` → Unchanged |
 
 ### Benefits
 
-- 📂 **Cross-folder navigation works** in SharePoint
+- 📂 **Folder-based navigation** - Users see file context
 - 🔗 **No broken links** from relative paths
-- 📝 **Documentation stays interconnected**
-- ✅ **Automatic** - no manual link updates needed
+- 📝 **Works for all file types** - Scripts, configs, markdown, etc.
+- ℹ️ **Helpful tooltips** - Shows which file is in the folder
+- ✅ **Automatic** - No manual link updates needed
 
 ### Notes
 
 - Only applies to converted markdown (`.md` → `.html`)
 - Raw markdown uploads (when `convert_md_to_html: false`) preserve original links
 - SharePoint folder structure must match repository structure
+- Links open folder views where users can find the referenced file
 
 </details>
 
@@ -1162,31 +1214,35 @@ Converted markdown files use **source `.md` file hash** for comparison to preven
 
 </details>
 
-### Debug Mode
+<details>
+<summary><strong>🐛 Debug Mode</strong></summary>
 
 Enable detailed logging for troubleshooting and diagnostics.
 
-**General Debug** (`debug: true`):
+### General Debug (`debug: true`)
+
 - Shows file processing decisions
 - Displays path calculations and folder operations
 - Traces sync deletion comparisons
 - Includes thread identifiers for parallel operations
 - Logs hash comparison details
 
-**Metadata Debug** (`debug_metadata: true`):
+### Metadata Debug (`debug_metadata: true`)
+
 - Shows Graph API HTTP requests/responses
 - Displays SharePoint column inspection
 - Tracks FileHash value lifecycle
 - Logs rate limiting headers
 - Shows batch update details
 
-**Thread Identifiers** (when `debug: true`):
+### Thread Identifiers (when `debug: true`)
+
 - `[Main]` - Main orchestration thread
 - `[Upload-N]` - Upload worker threads (N = worker number)
 - `[Convert-N]` - Markdown conversion worker threads
 - Helps track which thread produced each log line
 
-**Configuration:**
+### Configuration
 
 ```yaml
 # General debug only (recommended for most troubleshooting)
@@ -1203,7 +1259,8 @@ Enable detailed logging for troubleshooting and diagnostics.
     debug_metadata: true  # Very verbose!
 ```
 
-**Example Output with Debug:**
+### Example Output with Debug
+
 ```
 [Main] [?] Checking if file exists in SharePoint: docs/api/README.html
 [Main] [#] Source .md file hash: a1b2c3d4... (will be used for .html file)
@@ -1213,13 +1270,16 @@ Enable detailed logging for troubleshooting and diagnostics.
 [Main] [#] Backfilling empty FileHash for unchanged file: legacy/old.html
 ```
 
-**Use Cases:**
+### Use Cases
+
 - Troubleshooting unexpected uploads or skips
 - Debugging sync deletion identifying wrong files
 - Understanding folder structure preservation
 - Verifying exclusion patterns work correctly
 - Analyzing performance bottlenecks
 - Investigating Graph API permission issues
+
+</details>
 
 ### Sync Deletion
 

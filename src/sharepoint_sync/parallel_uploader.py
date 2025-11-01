@@ -234,6 +234,7 @@ class ParallelUploader:
             # Construct SharePoint base URL with proper encoding
             # Format: https://host/sites/sitename/Shared Documents/upload_path
             from urllib.parse import quote
+
             # Build full path: "Shared Documents" + "/" + upload_path
             full_library_path = f"Shared Documents/{config.upload_path}" if config.upload_path else "Shared Documents"
             # Encode each path component separately (preserves slashes)
@@ -510,6 +511,7 @@ class ParallelUploader:
             # Construct SharePoint base URL for link rewriting with proper encoding
             # Format: https://host/sites/sitename/Shared Documents/upload_path
             from urllib.parse import quote
+
             # Build full path: "Shared Documents" + "/" + upload_path
             full_library_path = f"Shared Documents/{config.upload_path}" if config.upload_path else "Shared Documents"
             # Encode each path component separately (preserves slashes)

@@ -500,16 +500,14 @@ def rewrite_markdown_links(md_content, sharepoint_base_url=None, current_file_re
         is_markdown = link_url.endswith('.md') or '.md#' in link_url
         is_folder = link_url.endswith('/')
 
-        # Skip if not markdown and not folder (leave other file types as-is)
-        # This preserves links to images, PDFs, etc.
-        if not is_markdown and not is_folder:
-            # Check if it has a file extension - if not, might be a folder reference
-            if '.' not in posixpath.basename(link_url):
-                # No extension, might be folder - treat as folder
-                is_folder = True
-            else:
-                # Has extension but not .md - skip
-                return match.group(0)
+        # Check if it has a file extension
+        has_extension = '.' in posixpath.basename(link_url)
+
+        # Convert ALL local file links to SharePoint URLs (not just .md files)
+        # Only skip if it's clearly not a file or folder
+        if not is_markdown and not is_folder and not has_extension:
+            # No extension and not a folder - might be anchor or other reference
+            return match.group(0)
 
         # Split anchor if present (e.g., README.md#section or folder/#section)
         if '#' in link_url:
@@ -535,14 +533,12 @@ def rewrite_markdown_links(md_content, sharepoint_base_url=None, current_file_re
         if is_folder and resolved_path.endswith('/'):
             resolved_path = resolved_path.rstrip('/')
 
-        # Determine if file can be viewed in browser
-        file_ext = posixpath.splitext(resolved_path)[1].lower()
-        is_web_viewable = file_ext in WEB_VIEWABLE_EXTENSIONS
-
-        # For non-web-viewable files, link to the containing folder instead
-        if not is_folder and not is_web_viewable:
+        # For files, link to the parent folder instead of the file itself
+        if not is_folder:
             # Get parent folder path
             folder_path = posixpath.dirname(resolved_path)
+            filename = posixpath.basename(resolved_path)
+
             if folder_path:
                 # Link to folder containing the file
                 # URL encode the path components but preserve slashes
@@ -553,26 +549,20 @@ def rewrite_markdown_links(md_content, sharepoint_base_url=None, current_file_re
                 # Folder view URL (SharePoint will show the folder contents)
                 full_url = f"{sharepoint_base_url}/{encoded_path}"
 
-                # Return rewritten markdown link with note about folder location
-                return f'[{link_text}]({full_url} "{resolved_path.split("/")[-1]} - Click to view folder")'
+                # Return rewritten markdown link with filename in title attribute (hover tooltip)
+                return f'[{link_text}]({full_url} "View folder containing {filename}")'
             else:
                 # File is in root - link to base URL
-                return f'[{link_text}]({sharepoint_base_url} "{resolved_path} - Click to view folder")'
+                return f'[{link_text}]({sharepoint_base_url} "View folder containing {filename}")'
 
+        # For folders, link directly to the folder
         # URL encode the path components but preserve slashes
         path_parts = resolved_path.split('/')
         encoded_parts = [quote(part) for part in path_parts]
         encoded_path = '/'.join(encoded_parts)
 
-        # Construct full SharePoint URL
-        if is_folder:
-            # Folder link format (opens folder view)
-            full_url = f"{sharepoint_base_url}/{encoded_path}"
-        else:
-            # File link format (web-viewable files)
-            # Add ?web=1 to open in browser preview instead of downloading
-            # This works for HTML, scripts, code files, text files, etc.
-            full_url = f"{sharepoint_base_url}/{encoded_path}?web=1{anchor}"
+        # Folder link format (opens folder view)
+        full_url = f"{sharepoint_base_url}/{encoded_path}"
 
         # Return rewritten markdown link
         return f'[{link_text}]({full_url})'
