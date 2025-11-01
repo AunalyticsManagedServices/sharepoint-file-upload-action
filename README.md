@@ -1039,16 +1039,30 @@ View <a href="https://company.sharepoint.com/sites/Docs/Shared%20Documents/READM
 </details>
 
 <details>
-<summary><strong>🔧 Automatic Mermaid Sanitization</strong></summary>
+<summary><strong>🔧 Smart Mermaid Sanitization</strong></summary>
 
-The action automatically fixes common Mermaid syntax issues before rendering.
+The action uses a **smart two-phase approach** to Mermaid diagram rendering:
+
+1. **First attempt**: Try rendering the original diagram as-is (preserves perfect fidelity)
+2. **Second attempt**: If syntax errors occur, automatically sanitize and retry
+3. **Fallback**: If both attempts fail, show diagram as code block
+
+This ensures valid diagrams render unchanged while problematic diagrams get automatic fixes.
+
+### Sanitization Strategy
+
+**Only sanitizes when needed:**
+- ✅ Detects specific issues before applying fixes
+- ✅ Avoids unnecessary transformations
+- ✅ Prevents double-escaping already-sanitized entity codes
+- ✅ Validates each rule before execution
 
 ### Before Sanitization (Would Fail)
 ````markdown
 ```mermaid
 graph TD
     A[Server #1] --> B{Version |No| Skip}
-    B -->||"Proceed"|| C[Deploy]
+    B -->|"Proceed; Deploy"| C[Deploy]
     C --> end
     D[Post Action<br/>(Restart)]
 ```
@@ -1060,7 +1074,7 @@ graph TD
 ```mermaid
 graph TD
     A[Server &#35;1] --> B{Version &#124;No&#124; Skip}
-    B -->|'Proceed'| C[Deploy]
+    B -->|'Proceed&#59; Deploy'| C[Deploy]
     C --> End
     D[Post Action<br>(Restart)]
 ```
@@ -1072,18 +1086,44 @@ graph TD
 |-------|--------|-------|-----|
 | Special chars in nodes | `[Server #1]` | `[Server &#35;1]` | `#` breaks parser |
 | Pipes in diamonds | `{Version \|No\| Skip}` | `{Version &#124;No&#124; Skip}` | Unescaped pipes break syntax |
-| Double pipes in edges | `-->\|\|"Proceed"\|\|` | `-->\|'Proceed'\|` | Invalid edge syntax |
+| Semicolons in labels | `\|"text; more"\|` | `\|'text&#59; more'\|` | Semicolons used as line breaks |
 | Double quotes | `\|"text"\|` | `\|'text'\|` | Prevents syntax errors |
 | Reserved words | `end` | `End` | Lowercase breaks flowcharts |
 | XHTML tags | `<br/>` | `<br>` | Mermaid only supports `<br>` |
 
-**Supported Node Shapes:**
-- Square brackets `[text]`
-- Parentheses `(text)`, `((text))`
-- Diamond/rhombus `{text}`, `{{text}}`
-- Trapezoids `[/text\]`, `[\text/]`
+### Special Characters Escaped
 
-All shapes are auto-sanitized for special characters. No manual fixes needed!
+All special characters are escaped using entity codes to prevent syntax errors:
+
+| Character | Entity Code | Why Escaped |
+|-----------|-------------|-------------|
+| `&` | `&#38;` | Can break parser |
+| `#` | `&#35;` | Mistaken for comments |
+| `%` | `&#37;` | Reserved character |
+| `\|` | `&#124;` | Used for node/edge delimiters |
+| `;` | `&#59;` | Alternative line break syntax |
+| `"` | `'` | Converted to single quote |
+
+**Supported Node Shapes:**
+- Square brackets `[text]` - Rectangles
+- Parentheses `(text)`, `((text))` - Rounded rectangles
+- Curly braces `{text}`, `{{text}}` - Diamond/rhombus nodes
+- Trapezoids `[/text\]`, `[\text/]` - Trapezoid shapes
+
+All shapes automatically sanitized for special characters. No manual fixes needed!
+
+### Console Output
+
+When sanitization is applied, you'll see which fixes were needed:
+
+```
+[*] Mermaid conversion failed, attempting with sanitization...
+    File: docs/workflow.md
+[SANITIZE] Applied fixes: special-chars-in-brackets, reserved-word-end, special-chars-in-edge-labels
+[OK] Mermaid diagram converted successfully after sanitization
+```
+
+This helps identify which diagrams had issues and what was fixed.
 
 </details>
 
